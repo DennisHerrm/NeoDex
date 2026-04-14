@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+********************************************************************
+NeoDex Toolkit - PackageContents.xml
+Warcraft III MDX/MDL Modeling Toolkit for 3ds Max 2022-2027
+********************************************************************
+-->
+<ApplicationPackage 
+    SchemaVersion="1.0"
+    ProductType="Application"
+    AutodeskProduct="3ds Max"
+    Name="Neodex Manager"
+    Description="A toolkit for WC3"
+    AppVersion="4.6.0"
+    Author="Benjamin Schiefer"
+    ProductCode="{20260411-1538-4.6.0-0000-NEODEXTOOL}"
+    UpgradeCode="{4583FEEB-C403-46E3-9C96-4563A4A34E24}">
+
+    <!-- General runtime requirements -->
+    <RuntimeRequirements
+        OS="Win64"
+        Platform="3ds Max"
+        SeriesMin="2022"
+        SeriesMax="2027" />
+
+    <CompanyDetails
+        Name="Benjamin Schiefer"
+        Url="www.benjaminschiefer.de"
+        Email="kontakt@benjaminschiefer.de" />
+
+    <!-- ================================================================
+         NATIVE BLP BITMAP I/O (one blp.bmi per Max version)
+         ================================================================ -->
+
+    <!-- Max 2022 -->
+    <Components Description="plugins parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2022" SeriesMax="2022" />
+        <ComponentEntry ModuleName="./native plugins/Max2022/blp.bmi" />
+    </Components>
+
+    <!-- Max 2023 -->
+    <Components Description="plugins parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2023" SeriesMax="2023" />
+        <ComponentEntry ModuleName="./native plugins/Max2023/blp.bmi" />
+    </Components>
+
+    <!-- Max 2024 -->
+    <Components Description="plugins parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2024" SeriesMax="2024" />
+        <ComponentEntry ModuleName="./native plugins/Max2024/blp.bmi" />
+    </Components>
+
+    <!-- Max 2025 -->
+    <Components Description="plugins parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2025" SeriesMax="2025" />
+        <ComponentEntry ModuleName="./native plugins/Max2025/blp.bmi" />
+    </Components>
+
+    <!-- Max 2026 -->
+    <Components Description="plugins parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2026" SeriesMax="2026" />
+        <ComponentEntry ModuleName="./native plugins/Max2026/blp.bmi" />
+    </Components>
+
+    <!-- Max 2027 -->
+    <Components Description="plugins parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2027" SeriesMax="2027" />
+        <ComponentEntry ModuleName="./native plugins/Max2027/blp.bmi" />
+    </Components>
+
+    <!-- ================================================================
+         MAXSCRIPT: Pre-start-up scripts (all versions)
+         ================================================================ -->
+
+    <Components Description="pre-start-up scripts parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2022" SeriesMax="2027" />
+        
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexGlobals.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexLocalization.ms" />
+
+        <ComponentEntry ModuleName="./scripted plugins parts/BlizzPart1.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/BlizzPart2.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Popcorn.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/FaceFX.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Wc3AttachPoint.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Wc3CollisionShapes.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Wc3VertexColor.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Wc3RefEvent.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Wc3Light.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/Wc3Material.ms" />
+        <ComponentEntry ModuleName="./scripted plugins parts/BlizzRibbon.ms" />
+
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/UtilityFunctions.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/ErrorReporter.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/GeometryUtilities.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/Wc3Model.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/Wc3Animation.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/ProgressUtility.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/Graph.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/Octree.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexIO.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexMDXReader.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexReaderReforge1200.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexMDLWriter.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexMDXWriter.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexModelRelinker.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexOptimize.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexNativeHelper.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexSceneRebuilder.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexSceneParser.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexImportFunctions.ms" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexExportFunctions.ms" />
+        
+    </Components>
+
+    <!-- ================================================================
+         MAXSCRIPT: Menu system (version-specific)
+         ================================================================ -->
+
+    <Components Description="pre-start-up scripts parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2025" SeriesMax="2027" />
+        <ComponentEntry ModuleName="./pre-start-up scripts parts/NeoDexMenuCallback.ms" />
+    </Components>
+
+    <Components Description="post-start-up scripts parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2022" SeriesMax="2024" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/NeoDexMenuInstaller.ms" />
+    </Components>
+
+    <!-- ================================================================
+         MAXSCRIPT: Post-start-up tools (all versions)
+         ================================================================ -->
+
+    <Components Description="post-start-up scripts parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2022" SeriesMax="2027" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/AnimTools.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/GridAndDummyCreator.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/NodeManager.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/ObjectManipulationTools.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/ObjectSettings.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/SequenceManager.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/GlobalSequenceManager.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/SkinChanger.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/TeamColorManager.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/VisibilityKeyer.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/Wc3AttachPointCallback.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/Wc3RefEventCallback.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/NeoDexSidebar.ms" />
+        <ComponentEntry ModuleName="./post-start-up scripts parts/NeoDexAutoUpdater.ms" />
+    </Components>
+    
+    <!-- ================================================================
+         MAXSCRIPT: Macroscripts (all versions)
+         ================================================================ -->
+
+    <Components Description="macroscripts parts">
+        <RuntimeRequirements OS="Win64" Platform="3ds Max" SeriesMin="2022" SeriesMax="2027" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_Importer.mcr" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_Exporter.mcr" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_Manager.mcr" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_Settings.mcr" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_About.mcr" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_KeyframeOptimizer.mcr" />
+        <ComponentEntry ModuleName="./macroscripts parts/NeoDex Toolkit-NeoDex_CellShadeCreator.mcr" />
+    </Components>
+
+</ApplicationPackage>
