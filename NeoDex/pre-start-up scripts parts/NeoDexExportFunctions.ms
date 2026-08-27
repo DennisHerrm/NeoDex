@@ -1403,6 +1403,12 @@ fn openFolderSmart folderPath =
 	(
 		local time1 = timestamp ()
 		local model
+		-- Hermite-Cache je Export zuruecksetzen. Er ist nach Objektnamen
+		-- geschluesselt und wurde bisher nie geleert - ein Eintrag aus einem
+		-- frueheren Export haette bei gleichnamigen Bones (Bip001, Bone01 ...)
+		-- auf das aktuelle Modell durchgeschlagen. undefined statt leerem
+		-- Dictionary, weil die Schreibstelle in Wc3Animation es selbst anlegt.
+		::HermiteEditedSequences = undefined
 		::Progress.initiate settings.progressLabelControl settings.progressBarControl
 		local sel = #()
 		for s in selection do append sel s

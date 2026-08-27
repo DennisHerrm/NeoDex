@@ -142,7 +142,7 @@ struct NeoDexSceneParserStruct
                         bound:(parts[1] as float)
                 )
             )
-        ) catch ()
+        ) catch (try (::ErrorReporter.logWarning "Export" "SceneParser.readSequenceDataFromCA" (getCurrentException())) catch())
         Wc3Sequence \
             rootNode.seqNames[idx] \
             (rootNode.startFrames[idx] as time) \
@@ -339,13 +339,61 @@ struct NeoDexSceneParserStruct
     -- MESH PROCESSING
     -- ============================================================================
     
+    -- Ermittelt, welche Map-Kanaele die Material-Layer eines Objekts benutzen.
+    -- Grundlage ist mapChannel jeder Bitmap-Textur; beim Export wird daraus
+    -- coordId geschrieben (siehe LoadLayer). Kanal 1 ist immer dabei.
+    --
+    -- Damit lassen sich unbenutzte Kanaele beim Unwrap ueberspringen, ohne sie
+    -- am Szenenobjekt zu loeschen. Frueher kappte cleanupMeshData pauschal auf
+    -- zwei Kanaele - das war die Notloesung gegen ein selbstgebautes Mesh mit
+    -- acht Kanaelen, hat aber auch legitime zweite UV-Sets vernichtet
+    -- (z.B. eingebackene Schatten mit eigener Belegung) und die Aenderung
+    -- blieb dauerhaft an der Szene haengen.
+    fn getUsedMapChannels obj =
+    (
+        local used = #(1)
+        try
+        (
+            local mats = #()
+            local m = obj.material
+            if m != undefined then
+            (
+                if ::Utils.IsWc3Material m then append mats m
+                else if (isProperty m #materialList) then
+                (
+                    for sm in m.materialList where sm != undefined and (::Utils.IsWc3Material sm) do
+                        append mats sm
+                )
+            )
+            for mm in mats do
+            (
+                try
+                (
+                    local t = mm.texture
+                    if t != undefined and classOf t == BitmapTexture then
+                    (
+                        local ch = t.coords.mapChannel
+                        if ch != undefined and ch >= 1 then appendIfUnique used (ch as integer)
+                    )
+                )
+                catch()
+            )
+        )
+        catch()
+        sort used
+        used
+    ),
+
     fn cleanupMeshData obj =
     (
         try
         (
-            local numMaps = meshop.getNumMaps obj
-            if numMaps > 2 then
-                meshop.setNumMaps obj 2 keep:true
+            -- Frueher wurde hier pauschal auf zwei Map-Kanaele gekappt:
+            --     if numMaps > 2 then meshop.setNumMaps obj 2 keep:true
+            -- Das lief auf dem SZENENOBJEKT und war damit dauerhaft - wer ein
+            -- Mesh mit mehreren UV-Sets exportierte, hatte danach nur noch
+            -- eines. Unbenutzte Kanaele werden jetzt beim Unwrap uebersprungen
+            -- (siehe getUsedMapChannels), die Szene bleibt unveraendert.
             
             if (meshop.getMapSupport obj 1) do
             (
@@ -435,23 +483,82 @@ struct NeoDexSceneParserStruct
         
         if ::Utils.IsSkinned obj then
         (
-            s = obj.skin
-            
-            local skinInstances = refs.dependentNodes s
-            if skinInstances.count > 1 then
-            (
-                instancemgr.MakeModifiersUnique obj s #individual
-                s = obj.skin
-            )
-            
+            max modify mode
             select obj
-            modPanel.setCurrentObject s
+            s = obj.modifiers[#Skin]
+            if s != undefined then (try (modPanel.setCurrentObject s) catch())
+
+            -- Geteilte Skin-Modifier auftrennen.
+            --
+            -- Teilen sich mehrere Meshes einen Modifier, liefert
+            -- skinOps.GetNumberVertices fuer ALLE die Vertex-Anzahl desselben
+            -- Objekts - und damit auch dessen Gewichte.
+            --
+            -- GEFRORENE OBJEKTE sind der Knackpunkt: sie lassen sich weder
+            -- auswaehlen noch im Modify-Panel bearbeiten. select und
+            -- modPanel.setCurrentObject laufen ins Leere, und das Auftrennen
+            -- arbeitet auf einem Modifier, der gar nicht aktiv ist - der kam
+            -- danach beschaedigt heraus. Deshalb hier kurz auftauen und
+            -- anschliessend wieder einfrieren.
+            local geteiltMit = #()
+            try (for n in (refs.dependentNodes s) where n != obj do append geteiltMit n.name) catch()
+            if geteiltMit.count > 0 then
+            (
+                local warFrozen = #()
+                try
+                (
+                    local alleNodes = #()
+                    local alleMods = #()
+                    for n in (refs.dependentNodes s) do
+                    (
+                        local sm = n.modifiers[#Skin]
+                        if sm != undefined then
+                        (
+                            if n.isFrozen then ( append warFrozen n ; n.isFrozen = false )
+                            append alleNodes n
+                            append alleMods sm
+                        )
+                    )
+                    if alleNodes.count > 1 and (instancemgr.CanMakeModifiersUnique alleNodes alleMods) then
+                        instancemgr.MakeModifiersUnique alleNodes alleMods #individual
+                    select obj
+                    s = obj.modifiers[#Skin]
+                    if s != undefined then (try (modPanel.setCurrentObject s) catch())
+                )
+                catch()
+                -- Frierzustand in jedem Fall wiederherstellen
+                for n in warFrozen do (try (n.isFrozen = true) catch())
+
+                local jetzt = -1
+                try (if s != undefined then jetzt = skinOps.GetNumberVertices s) catch()
+                if jetzt == obj.numverts then
+                    format "NeoDex: separated shared skin on '%'\n" obj.name
+                else
+                    ::ErrorReporter.logWarning "Export" obj.name \
+                        ("Skin modifier is shared with " + (geteiltMit as string) + \
+                         " and could not be separated. Right-click the Skin in the modifier " + \
+                         "stack and choose Make Unique, otherwise the bone weights of " + \
+                         "another mesh are exported.")
+            )
         )
         
         local funcBoneId = skinOps.GetVertexWeightBoneID
         local funcVertexCount = skinOps.GetVertexWeightCount
         local funcGetWeight = skinOps.GetVertexWeight
-        local validSkin = s != undefined and (skinOps.GetNumberVertices s) >= obj.numverts
+
+        -- Vertex-Anzahl muss GENAU passen. Vorher stand hier ">=", was einen
+        -- geteilten Modifier durchgewunken hat: dessen Zahl ist groesser als die
+        -- des kleineren Meshes, die Gewichte gehoeren aber zum falschen Objekt.
+        local skinVerts = -1
+        try (if s != undefined then skinVerts = skinOps.GetNumberVertices s) catch (skinVerts = -1)
+        local validSkin = (s != undefined) and (skinVerts == obj.numverts)
+
+        if s != undefined and not validSkin then
+            ::ErrorReporter.logWarning "Export" obj.name \
+                ("Skin ignored: reports " + (skinVerts as string) + " vertices, mesh has " + \
+                 (obj.numverts as string) + (if skinVerts == -1 then \
+                 ". The skin could not be read - is the modifier damaged?" else \
+                 ". A shared skin modifier is the usual cause - use Make Unique."))
         
         if validSkin then
         (
@@ -712,12 +819,25 @@ struct NeoDexSceneParserStruct
         #(faces, preCalculatedNormals, facegroupMapper)
     ),
     
-    fn canSimplifyUnwrapCalculation o =
+    fn canSimplifyUnwrapCalculation o usedChannels:undefined =
     (
+        -- Nur die tatsaechlich benutzten Kanaele zaehlen. Ein Mesh mit einem
+        -- vergessenen Restkanal soll nicht unnoetig auf den langsamen Pfad
+        -- fallen; umgekehrt muss bei zwei echten UV-Sets der Standardpfad
+        -- laufen, weil breakUnwrapFast nur einen Kanal verarbeitet.
         local numberOfMaps = 0
-        for i = 1 to (meshop.getNumMaps o) do
-            if (meshop.getMapSupport o i) then
-                numberOfMaps += 1
+        if usedChannels != undefined and usedChannels.count > 0 then
+        (
+            for i in usedChannels do
+                if (meshop.getMapSupport o i) then
+                    numberOfMaps += 1
+        )
+        else
+        (
+            for i = 1 to (meshop.getNumMaps o) do
+                if (meshop.getMapSupport o i) then
+                    numberOfMaps += 1
+        )
         if numberOfMaps != 1 then return false
         
         -- Prüfe ob TV→Geo Mapping eindeutig ist (keine gespiegelten UVs)
@@ -809,7 +929,7 @@ struct NeoDexSceneParserStruct
         #(verts, normals, #(tverts), matrixindices, faces, origVertMap)
     ),
     
-    fn processUnwrapStandard obj tmpIndices preCalculatedNormals faces:#() facegroupMapper:undefined =
+    fn processUnwrapStandard obj tmpIndices preCalculatedNormals faces:#() facegroupMapper:undefined usedChannels:undefined =
     (
         local verts = #()
         local normals = #()
@@ -817,7 +937,7 @@ struct NeoDexSceneParserStruct
         local matrixindices = #()
         local origVertMap = #()
         
-        local tmp = breakUnwrap obj faces:faces numVerts:(if facegroupMapper != undefined then facegroupMapper.count else undefined)
+        local tmp = breakUnwrap obj faces:faces numVerts:(if facegroupMapper != undefined then facegroupMapper.count else undefined) channels:usedChannels
         faces = tmp[1]
         tverts = tmp[2]
         local mapper = tmp[3]
@@ -1055,6 +1175,10 @@ struct NeoDexSceneParserStruct
         local facegroupMapper = smoothData[3]
         
         ::Progress.updateItem (loadName + "Unwrap")
+        -- Welche UV-Sets braucht dieses Objekt? Ergibt sich aus den
+        -- mapChannel-Werten seiner Material-Layer. Unbenutzte Kanaele werden
+        -- beim Unwrap uebersprungen, statt sie am Objekt zu loeschen.
+        local usedChannels = this.getUsedMapChannels obj
         local hasUnwrap = (getNumTVerts obj) > 0
         local verts, normals, tvertices, matrixindices
         local origVertMap = undefined
@@ -1064,7 +1188,7 @@ struct NeoDexSceneParserStruct
             if ((getNumTVerts obj) < obj.vertices.count) then
                 ::ErrorReporter.reportError "Bad Unwrap" obj.name undefined
             
-            if (this.canSimplifyUnwrapCalculation obj) and (not this.exportSmoothgroups) and (facegroupMapper == undefined) and ((getNumTVerts obj) >= obj.vertices.count) then
+            if (this.canSimplifyUnwrapCalculation obj usedChannels:usedChannels) and (not this.exportSmoothgroups) and (facegroupMapper == undefined) and ((getNumTVerts obj) >= obj.vertices.count) then
             (
                 local result = this.processUnwrapSimplified obj tmpIndices preCalculatedNormals
                 verts = result[1]
@@ -1076,7 +1200,7 @@ struct NeoDexSceneParserStruct
             )
             else
             (
-                local result = this.processUnwrapStandard obj tmpIndices preCalculatedNormals faces:faces facegroupMapper:facegroupMapper
+                local result = this.processUnwrapStandard obj tmpIndices preCalculatedNormals faces:faces facegroupMapper:facegroupMapper usedChannels:usedChannels
                 verts = result[1]
                 normals = result[2]
                 tvertices = result[3]
@@ -1299,7 +1423,7 @@ struct NeoDexSceneParserStruct
                 texFile = prefix + (this.GetImageFile filename)
             else
                 texFile = prefix + filename
-        ) catch ()
+        ) catch (try (::ErrorReporter.logWarning "Export" "SceneParser.LoadParticleEmitter2" (getCurrentException())) catch())
         if texFile != "" and texFile != undefined then
             tmp.texture = this.LoadTexture texFile (obj.rtexture - 1) false false
         else
@@ -2644,7 +2768,7 @@ struct NeoDexSceneParserStruct
                     wController = l.Wc3_W_Offset.controller
                     hasWAnimation = true
                 )
-            ) catch()
+            ) catch (try (::ErrorReporter.logWarning "Export" "SceneParser.LoadLayer" (getCurrentException())) catch())
             
             if (hasUAnimation or hasVAnimation or hasRotAnimation or hasUScaleAnimation or hasVScaleAnimation or hasWAnimation) then
             (
@@ -3013,7 +3137,7 @@ struct NeoDexSceneParserStruct
                             if distance mSc aSc > 0.001 then isDiff = true
                         )
                     )
-                ) catch()
+                ) catch (try (::ErrorReporter.logWarning "Export" "SceneParser.validateSharedSequences/Transform" (getCurrentException())) catch())
 
                 -- Visibility vergleichen: an allen Key-Zeitpunkten beider Ranges
                 if not isDiff then
@@ -3045,7 +3169,7 @@ struct NeoDexSceneParserStruct
                                 )
                             )
                         )
-                    ) catch()
+                    ) catch (try (::ErrorReporter.logWarning "Export" "SceneParser.validateSharedSequences/Visibility" (getCurrentException())) catch())
                 )
             )
 
