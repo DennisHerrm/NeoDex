@@ -431,6 +431,14 @@ struct NeoDexSceneMonitorStruct
 					(matchPattern (classof m as string) pattern:"*OpenPBR*") or \
 					(matchPattern (classof m as string) pattern:"*PBR*") then
 						append problemMats m
+					else if (classof m == Multimaterial) then
+					(
+						-- Multi/Sub-Object: a problem only if a sub-material still needs converting
+						local needsFix = false
+						for s in m.materialList do
+							if s != undefined and classof s != Warcraft3 then needsFix = true
+						if needsFix then append problemMats m
+					)
 				)
 			)
 		)
@@ -670,6 +678,48 @@ struct NeoDexSceneMonitorStruct
 		)
 	),
 	
+	-- Compact Standard/Physical/unknown -> Warcraft3 converter (texture + alpha + flags).
+	-- Used for sub-materials of a Multi/Sub-Object material, where the full inline
+	-- conversion block below would be overkill.
+	fn ndxQuickWc3 srcMat uShaded uFogged twoSided fMode prefixPath =
+	(
+		local nm = Warcraft3()
+		try ( nm.name = srcMat.name + "_wc3" ) catch ( nm.name = "sub_wc3" )
+		nm.unshaded = uShaded
+		nm.unfogged = uFogged
+		nm.twosides = twoSided
+		nm.filtermode = fMode
+		if prefixPath != "" then nm.path = prefixPath
+
+		local tex = undefined
+		local a = 100.0
+		local c = classof srcMat
+		if c == Standardmaterial then
+		(
+			if srcMat.diffuseMap != undefined and classof srcMat.diffuseMap == Bitmaptexture then tex = srcMat.diffuseMap
+			try ( if srcMat.opacity < 100 then a = srcMat.opacity ) catch ()
+		)
+		else if c == Physical_Material then
+		(
+			try ( if srcMat.base_color_map != undefined and classof srcMat.base_color_map == Bitmaptexture then tex = srcMat.base_color_map ) catch ()
+			try ( if srcMat.transparency > 0 then a = (1.0 - srcMat.transparency) * 100.0 ) catch ()
+		)
+		else
+		(
+			for p in #(#diffuseMap, #base_color_map, #baseColorMap) do
+				if tex == undefined and (isProperty srcMat p) then
+				(
+					local v = undefined
+					try ( v = getProperty srcMat p ) catch ()
+					if v != undefined and classof v == Bitmaptexture then tex = v
+				)
+		)
+		if tex != undefined and tex.filename != undefined and tex.filename != "" then
+			nm.texture = Bitmaptexture fileName:tex.filename
+		nm.Alpha = a
+		nm
+	),
+
 	-- Fix materials to Warcraft3
 	fn fixMaterials =
 	(
@@ -704,9 +754,22 @@ struct NeoDexSceneMonitorStruct
 		(
 			for m in materialProblems do
 			(
+				-- Multi/Sub-Object: convert each sub-material in place, keep the wrapper
+				-- so the exporter still splits the mesh per sub-material.
+				if classof m == Multimaterial then
+				(
+					for i = 1 to m.materialList.count do
+					(
+						local s = m.materialList[i]
+						if s != undefined and classof s != Warcraft3 then
+							m.materialList[i] = ndxQuickWc3 s applyUnshaded applyUnfogged applyTwosided applyFilterMode applyPrefixPath
+					)
+					continue
+				)
+
 				local newMat = Warcraft3()
 				newMat.name = m.name + "_wc3"
-				
+
 				-- Apply saved settings
 				newMat.unshaded = applyUnshaded
 				newMat.unfogged = applyUnfogged
@@ -1166,6 +1229,52 @@ fn getIncrementedFilename filename =
 	Returns:
 		Number of textures successfully converted
 */
+
+-- Collect (bitmapTexture, prefixPath) pairs from ANY material type so the BLP
+-- output matches what the exporter actually writes: Warcraft3, Composite,
+-- Multi/Sub-Object, Standard, Physical, and unknown classes via probing.
+-- File-scope (not nested) so it may recurse - MAXScript forbids a local
+-- function referencing itself.
+fn ndxCollectMatTextures mat acc depth =
+(
+	if mat == undefined or depth > 6 then return acc
+	local c = classof mat
+	if c == Warcraft3 then
+	(
+		if mat.texture != undefined and classof mat.texture == Bitmaptexture then
+			append acc #(mat.texture, (if mat.path != undefined then mat.path else ""))
+	)
+	else if c == Multimaterial then
+		( for s in mat.materialList do ndxCollectMatTextures s acc (depth + 1) )
+	else if c == CompositeMaterial then
+	(
+		ndxCollectMatTextures mat.baseMaterial acc (depth + 1)
+		for s in mat.materialList do ndxCollectMatTextures s acc (depth + 1)
+	)
+	else if c == Standardmaterial then
+	(
+		if mat.diffuseMap != undefined and classof mat.diffuseMap == Bitmaptexture then
+			append acc #(mat.diffuseMap, "")
+	)
+	else if c == Physical_Material then
+	(
+		local bm = undefined
+		try ( bm = mat.base_color_map ) catch ()
+		if bm != undefined and classof bm == Bitmaptexture then append acc #(bm, "")
+	)
+	else
+	(
+		for p in #(#diffuseMap, #base_color_map, #baseColorMap) do
+			if (isProperty mat p) then
+			(
+				local v = undefined
+				try ( v = getProperty mat p ) catch ()
+				if v != undefined and classof v == Bitmaptexture then append acc #(v, "")
+			)
+	)
+	acc
+)
+
 fn convertTexturesToBLP exportFilePath settings =
 (
 	local exePath = (systemTools.getEnvVariable "APPDATA") + "\\Autodesk\\ApplicationPlugins\\NeoDex\\WhiteoutTexCLI.exe"
@@ -1179,31 +1288,23 @@ fn convertTexturesToBLP exportFilePath settings =
 	local converted = 0
 	local skipped = 0
 	local alreadyDone = #()
-	
+
 	for obj in objects do
 	(
 		local mat = obj.material
 		if mat == undefined then continue
-		
-		local wc3Mats = #()
-		if classof mat == Warcraft3 then
-			append wc3Mats mat
-		else if classof mat == CompositeMaterial then
+
+		local wc3Mats = ndxCollectMatTextures mat #() 0
+
+		for entry in wc3Mats do
 		(
-			if mat.baseMaterial != undefined and classof mat.baseMaterial == Warcraft3 then
-				append wc3Mats mat.baseMaterial
-			for j = 1 to mat.materialList.count do
-				if mat.materialList[j] != undefined and classof mat.materialList[j] == Warcraft3 then
-					append wc3Mats mat.materialList[j]
-		)
-		
-		for wc3 in wc3Mats do
-		(
+			local entryTex = entry[1]
+			local entryPath = entry[2]
 			-- Keine Textur vorhanden, ueberspringen
-			if wc3.texture == undefined then continue
-			if classof wc3.texture != Bitmaptexture then continue
-			
-			local srcFile = wc3.texture.filename
+			if entryTex == undefined then continue
+			if classof entryTex != Bitmaptexture then continue
+
+			local srcFile = entryTex.filename
 			if srcFile == undefined or srcFile == "" then continue
 			
 			-- Quell-Textur existiert nicht auf der Festplatte (nur Pfad-Referenz)
@@ -1232,7 +1333,7 @@ fn convertTexturesToBLP exportFilePath settings =
 			local baseName = getFilenameFile srcFile
 			
 			-- Prefix-Path als Unterordner (z.B. "war3mapImported\")
-			local prefix = if wc3.path != undefined and wc3.path != "" then wc3.path else ""
+			local prefix = if entryPath != undefined and entryPath != "" then entryPath else ""
 			local outDir = exportDir + prefix
 			makeDir outDir all:true
 			local blpPath = outDir + baseName + ".blp"
@@ -1265,17 +1366,43 @@ fn convertTexturesToBLP exportFilePath settings =
 				if settings.texMipmaps then
 					opts += " --generate_mipmaps=maximum"
 				
-				-- Unicode-safe: copy source to temp dir with ASCII-only names
+				-- Unicode-safe: work in temp dir with ASCII-only names
 				-- (WhiteoutTexCLI.exe does not support Unicode paths)
 				local tempDir = (getDir #temp) + "\\"
 				local uniqueID = (timestamp() as string) + (random 1000 9999 as string)
-				local tempSrc = tempDir + "ndx_src_" + uniqueID + srcExt
 				local tempBlp = tempDir + "ndx_out_" + uniqueID + ".blp"
-				
-				try ( copyFile srcFile tempSrc ) catch
+				local tempSrc = undefined
+
+				-- Hand WhiteoutTexCLI a PNG it can definitely read. Loading through
+				-- Max's own bitmap pipeline first fixes source formats the CLI
+				-- mishandles - notably 16-bit uncompressed DDS, which it silently
+				-- turns into a blank white BLP. Fall back to a raw copy if Max
+				-- cannot open the source.
+				local srcBmp = undefined
+				try ( srcBmp = openBitmap srcFile ) catch ( srcBmp = undefined )
+				if srcBmp != undefined then
 				(
-					format "NeoDex BLP convert failed (copy to temp): %\n" srcFile
-					continue
+					local pngPath = tempDir + "ndx_src_" + uniqueID + ".png"
+					try
+					(
+						local conv = bitmap srcBmp.width srcBmp.height color:(color 0 0 0 0)
+						copy srcBmp conv
+						conv.filename = pngPath
+						save conv
+						close conv
+						if doesFileExist pngPath then tempSrc = pngPath
+					)
+					catch ( tempSrc = undefined )
+					try ( close srcBmp ) catch ()
+				)
+				if tempSrc == undefined then
+				(
+					tempSrc = tempDir + "ndx_src_" + uniqueID + srcExt
+					try ( copyFile srcFile tempSrc ) catch
+					(
+						format "NeoDex BLP convert failed (prepare source): %\n" srcFile
+						continue
+					)
 				)
 				
 				local cmd = "cmd /c \"\"" + exePath + "\" \"" + tempSrc + "\" \"" + tempBlp + "\" " + opts + "\""

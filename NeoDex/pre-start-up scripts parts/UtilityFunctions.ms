@@ -352,6 +352,10 @@ struct UtilityFunctionsStruct
         else
             false
     ),
+
+    -- Multi/Sub-Object material (one material node, several sub-materials keyed by face Material-ID).
+    -- Unlike Composite, these must be exported by SPLITTING the mesh per sub-material.
+    fn IsMultiSubMaterial m = (m != undefined and classOf m == Multimaterial),
     
     fn IsSkinned o = (o.modifiers[#Skin] != undefined),
     fn IsMesh o = (classOf o == Editable_mesh or classOf o == Editable_Poly),
@@ -657,6 +661,7 @@ global Utils = UtilityFunctionsStruct()
 -- ============================================================================
 fn IsWc3Material obj = Utils.IsWc3Material obj
 fn IsMultiLayered obj = Utils.IsMultiLayered obj
+fn IsMultiSubMaterial obj = Utils.IsMultiSubMaterial obj
 fn IsMesh obj = Utils.IsMesh obj
 fn IsSkinned obj = Utils.IsSkinned obj
 fn IsLight obj = Utils.IsLight obj

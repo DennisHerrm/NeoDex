@@ -111,6 +111,8 @@ struct Wc3Geoset (
 	skinData,   -- Reforged
 	lod,        -- Reforged
 	lodName,    -- Reforged
+	srcFaceMatIDs,  -- transient (export): per-face Max Material-ID, used to split Multi/Sub-Object meshes
+	splitSubMat,    -- transient (export): resolved Max sub-material for a geoset split off a Multi/Sub mesh
 	ex
 )
 

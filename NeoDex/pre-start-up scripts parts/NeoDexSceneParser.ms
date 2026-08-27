@@ -97,6 +97,10 @@ struct NeoDexSceneParserStruct
     public exportSmoothgroups = false,
     public keepUnusedBonesHelpers = false,
     public exportVersion = 800,
+
+    -- caches src (Standard/Physical/…) material -> synthesised FakeMaterial so repeated
+    -- sub-materials of a split Multi/Sub mesh collapse to a single Wc3 material
+    public MaterialCoerceCache = #(),
     
     -- Default objects
     public DefaultBone = undefined,
@@ -1137,6 +1141,23 @@ struct NeoDexSceneParserStruct
         geoset.id = this.GeosetCounts
         this.GeosetCounts = this.GeosetCounts + 1
         append this.Meshes geoset
+
+        -- Multi/Sub-Object material: capture the per-face Material-ID now, while face
+        -- order still matches the source mesh. Every unwrap/smoothgroup path below
+        -- only splits vertices, never reorders or drops faces, so geoset.faces[i]
+        -- keeps corresponding to source face i. SplitMultiMaterialGeosets() uses this.
+        geoset.srcFaceMatIDs = undefined
+        try
+        (
+            if (::Utils.IsMultiSubMaterial obj.material) then
+            (
+                local fm = #()
+                fm[obj.numfaces] = undefined
+                for f = 1 to obj.numfaces do fm[f] = (getFaceMatID obj f)
+                geoset.srcFaceMatIDs = fm
+            )
+        )
+        catch ()
         
         local loadName = "Loading " + obj.name + ": "
         
@@ -2036,7 +2057,194 @@ struct NeoDexSceneParserStruct
     -- ============================================================================
     -- GEOSET OPERATIONS
     -- ============================================================================
-    
+
+    -- Resolve which sub-material node a given Max face Material-ID points at
+    -- inside a Multi/Sub-Object material. Falls back to the wrapping material
+    -- (treated as "no usable sub-material") if the slot is empty.
+    fn getSubMaterialForFaceID mat faceID =
+    (
+        if not (::Utils.IsMultiSubMaterial mat) then return mat
+        local si = 0
+        try ( si = findItem mat.materialIDList faceID ) catch ( si = 0 )
+        if si == 0 then
+        (
+            local n = try (mat.numsubs) catch (0)
+            if n == undefined or n < 1 then n = 1
+            si = (mod (faceID - 1) n) + 1
+        )
+        local sub = undefined
+        try ( sub = mat.materialList[si] ) catch ()
+        if sub == undefined then sub = mat
+        sub
+    ),
+
+    -- WC3 geosets carry exactly one material, so a mesh that uses a Multi/Sub-Object
+    -- material must be split into one geoset per sub-material. Runs after LoadExtents
+    -- (children inherit the parent's animated extents) and before DoGeosetTweaks, so
+    -- mergeSimilarGeosets can still weld pieces that share a sub-material and
+    -- averageSharedNormals still smooths across the new seams.
+    fn SplitMultiMaterialGeosets =
+    (
+        ::Progress.downLevel 10 1
+        ::Progress.showItem "Splitting Multi-Material Geosets"
+
+        local result = #()
+        local splitCount = 0
+
+        for geo in this.Meshes do
+        (
+            local srcMat = try (geo.mesh.material) catch (undefined)
+            local fmids = geo.srcFaceMatIDs
+
+            if srcMat == undefined or not (::Utils.IsMultiSubMaterial srcMat) or \
+               fmids == undefined or geo.faces.count == 0 then
+            (
+                append result geo
+                continue
+            )
+
+            -- Bucket faces by the sub-material node they resolve to
+            local subNodes = #()
+            local buckets = #()
+            for fi = 1 to geo.faces.count do
+            (
+                local fid = if fi <= fmids.count and fmids[fi] != undefined then fmids[fi] else 1
+                local sub = this.getSubMaterialForFaceID srcMat fid
+                local bi = findItem subNodes sub
+                if bi == 0 then
+                (
+                    append subNodes sub
+                    append buckets #(fi)
+                )
+                else
+                    append buckets[bi] fi
+            )
+
+            if subNodes.count <= 1 then
+            (
+                -- Effectively a single material: pin the resolved sub-material, no split.
+                if subNodes.count == 1 then geo.splitSubMat = subNodes[1]
+                geo.srcFaceMatIDs = undefined
+                append result geo
+                continue
+            )
+
+            -- Detach parent geoset from its bones; children re-attach to the ones they use
+            local parentBoneIds = #()
+            for grp in geo.matrices do for b in grp do
+                if (findItem parentBoneIds b) == 0 then append parentBoneIds b
+            for b in parentBoneIds do
+            (
+                local bsub = this.Wc3Bones[b + 1].sub
+                local pi = findItem bsub.geosets geo
+                if pi != 0 then deleteItem bsub.geosets pi
+            )
+
+            local nch = geo.tvertices.count
+
+            for g = 1 to subNodes.count do
+            (
+                local faceIds = buckets[g]
+
+                local usedBits = #{}
+                for fi in faceIds do
+                (
+                    local f = geo.faces[fi]
+                    usedBits[(f.x as integer)] = true
+                    usedBits[(f.y as integer)] = true
+                    usedBits[(f.z as integer)] = true
+                )
+                local usedArr = usedBits as array
+                local nv = usedArr.count
+
+                local remap = #()
+                local child = Wc3Geoset ()
+                child.vertices = #()
+                child.normals = #()
+                child.matrixindices = #()
+                child.tvertices = #()
+                for c = 1 to nch do child.tvertices[c] = #()
+
+                local hasTang = (geo.tangents != undefined and geo.tangents.count > 0)
+                local hasSkin = (geo.skinData != undefined and geo.skinData.count > 0)
+                if hasTang then child.tangents = #()
+                if hasSkin then child.skinData = #()
+
+                if nv > 0 then
+                (
+                    child.vertices[nv] = undefined
+                    child.normals[nv] = undefined
+                    child.matrixindices[nv] = undefined
+                    for c = 1 to nch do child.tvertices[c][nv] = undefined
+                    if hasTang then child.tangents[nv] = undefined
+                    if hasSkin then child.skinData[nv] = undefined
+                )
+
+                for ni = 1 to nv do
+                (
+                    local ov = usedArr[ni]
+                    remap[ov] = ni
+                    child.vertices[ni]      = geo.vertices[ov]
+                    child.normals[ni]       = geo.normals[ov]
+                    child.matrixindices[ni] = geo.matrixindices[ov]
+                    for c = 1 to nch do
+                    (
+                        local ch = geo.tvertices[c]
+                        child.tvertices[c][ni] = if ch != undefined and ov <= ch.count then ch[ov] else [0,0]
+                    )
+                    if hasTang then
+                        child.tangents[ni] = if ov <= geo.tangents.count then geo.tangents[ov] else undefined
+                    if hasSkin then
+                        child.skinData[ni] = if ov <= geo.skinData.count then geo.skinData[ov] else undefined
+                )
+
+                child.faces = #()
+                if faceIds.count > 0 then child.faces[faceIds.count] = undefined
+                for k = 1 to faceIds.count do
+                (
+                    local f = geo.faces[faceIds[k]]
+                    child.faces[k] = [ remap[(f.x as integer)], remap[(f.y as integer)], remap[(f.z as integer)] ]
+                )
+
+                child.matrices = deepCopy geo.matrices
+                this.cleanMatrices child
+
+                child.mainExtents = deepCopy geo.mainExtents
+                child.extents = deepCopy geo.extents
+                child.visObj = geo.visObj
+                child.unselectable = geo.unselectable
+                child.numUVWmaps = geo.numUVWmaps
+                child.lod = geo.lod
+                child.lodName = geo.lodName
+                -- keep the real source node (extents / user-props / skin queries still work);
+                -- the sub-material is tracked separately so merge & LoadMaterials can see it
+                child.mesh = geo.mesh
+                child.splitSubMat = subNodes[g]
+
+                local childBoneIds = #()
+                for grp in child.matrices do for b in grp do
+                    if (findItem childBoneIds b) == 0 then append childBoneIds b
+                for b in childBoneIds do
+                (
+                    local bsub = this.Wc3Bones[b + 1].sub
+                    if (findItem bsub.geosets child) == 0 then append bsub.geosets child
+                )
+
+                append result child
+            )
+            splitCount += 1
+        )
+
+        this.Meshes = result
+        this.GeosetCounts = 0
+        for m in this.Meshes do ( m.id = this.GeosetCounts; this.GeosetCounts += 1 )
+
+        if splitCount > 0 then
+            format "NeoDex: split % multi-material mesh(es); % geosets total\n" splitCount this.Meshes.count
+
+        ::Progress.upLevel ()
+    ),
+
     fn mergeExtents ex1 ex2 =
     (
         local result = Wc3Extent ()
@@ -2057,7 +2265,9 @@ struct NeoDexSceneParserStruct
     (
         local mesh1 = geo1.mesh
         local mesh2 = geo2.mesh
-        mesh1.material == mesh2.material and (this.compareVisibility geo1.visObj geo2.visObj)
+        mesh1.material == mesh2.material and \
+        (geo1.splitSubMat == geo2.splitSubMat) and \
+        (this.compareVisibility geo1.visObj geo2.visObj)
     ),
     
     fn mergeGeosets geo1 geo2 =
@@ -2129,6 +2339,7 @@ struct NeoDexSceneParserStruct
         tmpBones = ::Utils.ArrayMakeUnique tmpBones
         for b in tmpBones do append b.geosets newGeo
         newGeo.mesh = FakeMesh "Generated Geoset" geo1.mesh.material geo1.mesh.modifiers
+        newGeo.splitSubMat = geo1.splitSubMat
         newGeo.unselectable = geo1.unselectable and geo2.unselectable
         local i1 = findItem this.Meshes geo1
         deleteItem this.Meshes i1
@@ -2891,6 +3102,48 @@ struct NeoDexSceneParserStruct
         Wc3Layers
     ),
     
+    -- Turn an arbitrary Max material (Standard / Physical / unknown class, or a
+    -- Multi/Sub sub-material) into something LoadMaterial understands: a Warcraft3
+    -- node is returned as-is, everything else is wrapped in a FakeMaterial carrying
+    -- its diffuse/base-color bitmap. Returns undefined when no texture slot is found.
+    fn CoerceMaterial mat =
+    (
+        if mat == undefined then return undefined
+        if (::Utils.IsWc3Material mat) or (classOf mat == FakeMaterial) then return mat
+
+        for pair in this.MaterialCoerceCache where pair[1] == mat do return pair[2]
+
+        local fake = undefined
+
+        if (classOf mat == Standardmaterial) then
+            fake = FakeMaterial texture:mat.diffuseMap alpha:(try (mat.opacity) catch (100.0))
+        else if (classOf mat == Physical_Material) then
+        (
+            local t = undefined
+            try ( t = mat.base_color_map ) catch ()
+            local a = 100.0
+            try ( if mat.transparency > 0 then a = (1.0 - mat.transparency) * 100.0 ) catch ()
+            fake = FakeMaterial texture:t alpha:a
+        )
+        else
+        (
+            local probe = #(#diffuseMap, #base_color_map, #baseColorMap, #diffuse_map, #albedoMap, #albedo_map, #color_map, #map1)
+            for p in probe while fake == undefined do
+            (
+                if (isProperty mat p) then
+                (
+                    local v = undefined
+                    try ( v = getProperty mat p ) catch ()
+                    if v != undefined and ((superClassOf v == textureMap) or (classOf v == Bitmaptexture)) then
+                        fake = FakeMaterial texture:v alpha:100.0
+                )
+            )
+        )
+
+        if fake != undefined then append this.MaterialCoerceCache #(mat, fake)
+        fake
+    ),
+
     fn LoadMaterial mat =
     (
         local index = ::Utils.ArrayFindItemEx this.Wc3Materials mat this.ObjectChecker
@@ -2916,9 +3169,10 @@ struct NeoDexSceneParserStruct
         ::Progress.showItem "Loading Materials and TvertexAnimations"
         for geo in this.Meshes do (
             local m = geo.mesh
-            local mat = m.material
+            -- geosets split off a Multi/Sub mesh carry their resolved sub-material here
+            local mat = if geo.splitSubMat != undefined then geo.splitSubMat else m.material
             local tvertexAnim
-            
+
             if mat != undefined and (::Utils.IsWc3Material mat or ::Utils.IsMultiLayered mat) then
             (
                 local wc3Mat = this.LoadMaterial mat
@@ -2926,13 +3180,14 @@ struct NeoDexSceneParserStruct
             )
             else
             (
-                local wc3Mat
-                if mat != undefined and classOf mat == Standardmaterial then
-                    wc3Mat = this.LoadMaterial (FakeMaterial texture:mat.diffuseMap alpha:mat.opacity)
+                local coerced = this.CoerceMaterial mat
+                if coerced != undefined then
+                    geo.material = this.LoadMaterial coerced
                 else
-                    wc3Mat = this.LoadMaterial this.DefaultMaterial
-                geo.material = wc3Mat
-                ::ErrorReporter.reportError "Material" geo.mesh.name undefined
+                (
+                    geo.material = this.LoadMaterial this.DefaultMaterial
+                    ::ErrorReporter.reportError "Material" geo.mesh.name undefined
+                )
             )
         )
         for r in this.Wc3RibbonEmitters do
@@ -2945,12 +3200,11 @@ struct NeoDexSceneParserStruct
             )
             else
             (
-                local wc3Mat
-                if mat != undefined and classOf mat == Standardmaterial then
-                    wc3Mat = this.LoadMaterial (FakeMaterial texture:mat.diffuseMap alpha:mat.opacity)
+                local coerced = this.CoerceMaterial mat
+                if coerced != undefined then
+                    r.sub.material = this.LoadMaterial coerced
                 else
-                    wc3Mat = this.LoadMaterial this.DefaultMaterial
-                r.sub.material = wc3Mat
+                    r.sub.material = this.LoadMaterial this.DefaultMaterial
             )
         )
         for p in this.Wc3PartEmitters2 do
@@ -3041,7 +3295,8 @@ struct NeoDexSceneParserStruct
         this.Wc3Collisions = #()
         this.Wc3CornEmitters = #()
         this.Wc3FaceFXTargets = #()
-        
+        this.MaterialCoerceCache = #()
+
         this.GeosetCounts = 0
         this.BoneCounts = 0
         this.ObjectIdCount = 0
@@ -3239,6 +3494,7 @@ struct NeoDexSceneParserStruct
         ::AnimationManager.InitiateAnimationData (::Utils.ArrayMap animSequences (fn tmp a = interval a.startTime a.endTime)) animSequences
         this.LoadObjects ()
         this.LoadExtents extentsCalculation:extentsCalculation extentsPrecision:(11 - extentsPrecision)
+        this.SplitMultiMaterialGeosets ()
         this.DoGeosetTweaks mergeGeosets:mergeGeosets ATFixNormals:ATFixNormals ATThresshold:ATThresshold fixSharedNormals:fixSharedNormals
         this.LoadMaterials ()
         this.LoadGeosetAnims ()
