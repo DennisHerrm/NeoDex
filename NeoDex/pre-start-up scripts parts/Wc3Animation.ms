@@ -309,7 +309,24 @@ struct Wc3AnimationStruct
         )
     ),
     
-    fn isIKAffected o = classOf o.transform.controller == IKControl,
+    -- Liefert den Transform-Controller robust.
+    --
+    -- Bei Biped-Nub-Dummies (Bip001 HeadNub, Toe0Nub, Finger0Nub) mit
+    -- einem BipDriven_Control liefert o.transform einen nackten Matrix3
+    -- statt des SubAnims. ".controller" darauf wirft dann
+    -- "Unknown property: controller in (matrix3 ...)" und bricht den
+    -- Export-Zweig ab. getTMController funktioniert bei diesen Objekten.
+    --
+    -- Trat erst auf, seit das One-Click-Tool Attachment Points an genau
+    -- diese Nubs parentet - vorher liefen sie nie durch den Export.
+    fn getTM o =
+    (
+        local c = try ( o.transform.controller ) catch ( undefined )
+        if c == undefined do c = try ( getTMController o ) catch ( undefined )
+        c
+    ),
+
+    fn isIKAffected o = ( classOf (this.getTM o) == IKControl ),
     
     fn isObjectConstrained o =
     (
@@ -330,7 +347,7 @@ struct Wc3AnimationStruct
     
     fn isLinkConstrained o =
     (
-        classOf o.transform.controller == Link_Constraint
+        classOf (this.getTM o) == Link_Constraint
     ),
 
     fn isMassFXBaked o =

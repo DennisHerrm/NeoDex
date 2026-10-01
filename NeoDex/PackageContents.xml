@@ -11,9 +11,9 @@ Warcraft III MDX/MDL Modeling Toolkit for 3ds Max 2022-2027
     AutodeskProduct="3ds Max"
     Name="Neodex Manager"
     Description="A toolkit for WC3"
-    AppVersion="4.6.0"
+    AppVersion="4.7.0"
     Author="Benjamin Schiefer"
-    ProductCode="{20260411-1538-4.6.0-0000-NEODEXTOOL}"
+    ProductCode="{20260801-2059-4700-A040-202608012059}"
     UpgradeCode="{4583FEEB-C403-46E3-9C96-4563A4A34E24}">
 
     <!-- General runtime requirements -->

@@ -17,7 +17,6 @@ struct GlobalSequenceManager
 	fn backupControllerKeys ctrl =
 	(
 		local data = #()
-		format "DEBUG backup ctrl=% class=%\n" ctrl (classOf ctrl)
 		-- Sub-Controller (Euler_XYZ, Position_XYZ etc.)
 		for i = 1 to 3 do
 		(
@@ -30,7 +29,6 @@ struct GlobalSequenceManager
 					for k = 1 to sc.keys.count do
 						append subKeys #(sc.keys[k].time, sc.keys[k].value)
 					append data #("sub", i, subKeys, try(getAfterORT sc)catch(#constant))
-					format "DEBUG   sub[%]: % keys, ort=%\n" i subKeys.count (try(getAfterORT sc)catch(#constant))
 				)
 			)
 			catch()
@@ -44,21 +42,17 @@ struct GlobalSequenceManager
 				for k = 1 to ctrl.keys.count do
 					append mainKeys #(ctrl.keys[k].time, ctrl.keys[k].value)
 				append data #("main", 0, mainKeys, try(getAfterORT ctrl)catch(#constant))
-				format "DEBUG   main: % keys, ort=%\n" mainKeys.count (try(getAfterORT ctrl)catch(#constant))
 			)
 		)
 		catch()
-		format "DEBUG   backup total entries=%\n" data.count
 		data
 	),
 	
 	-- Stellt Key-Daten auf einem Controller wieder her
 	fn restoreControllerKeys ctrl data =
 	(
-		format "DEBUG restore ctrl=% data entries=%\n" (classOf ctrl) data.count
 		-- Erst alle Keys löschen
 		this.forceDeleteAllKeys ctrl
-		format "DEBUG   after forceDelete: keys=%\n" (this.countControllerKeys ctrl)
 		-- Keys wiederherstellen
 		for entry in data do
 		(
@@ -66,30 +60,25 @@ struct GlobalSequenceManager
 			local idx = entry[2]
 			local keyData = entry[3]
 			local ort = entry[4]
-			format "DEBUG   restoring type=% idx=% keyCount=% ort=%\n" entryType idx keyData.count ort
 			
 			if entryType == "sub" then
 			(
 				try
 				(
 					local sc = ctrl[idx].controller
-					format "DEBUG     sub ctrl class=%\n" (classOf sc)
 					for kd in keyData do
 						with animate on at time kd[1] (sc.value = kd[2])
 					try (setAfterORT sc ort) catch()
-					format "DEBUG     sub keys after restore=%\n" (try(sc.keys.count)catch("?"))
 				)
-				catch(format "DEBUG     sub RESTORE ERROR: %\n" (getCurrentException()))
+				catch()
 			)
 			else
 			(
 				for kd in keyData do
 					with animate on at time kd[1] (ctrl.value = kd[2])
 				try (setAfterORT ctrl ort) catch()
-				format "DEBUG     main keys after restore=%\n" (this.countControllerKeys ctrl)
 			)
 		)
-		format "DEBUG   FINAL keys=%\n" (this.countControllerKeys ctrl)
 	),
 	
 	fn classifyUVController ctrl =
@@ -200,6 +189,46 @@ struct GlobalSequenceManager
 		catch()
 	),
 	
+	-- Sammelt ein Material und alle darin verschachtelten Sub-Materialien flach ein.
+	-- Noetig, weil NeoDex beim Import mehrschichtiger WC3-Materialien eine
+	-- CompositeMaterial anlegt (NeoDexSceneRebuilder.getCompoundMaterial).
+	-- Deren .alpha und .texture existieren nicht, der Zugriff lief bisher ins
+	-- catch() und die Animationen der Layer blieben unsichtbar.
+	-- Deckt Composite (baseMaterial + materialList) und Multi/Sub-Object
+	-- (getNumSubMtls/getSubMtl) ab. acc ist ein Array und damit Referenztyp.
+	fn collectMaterialTree mat depth acc =
+	(
+		if mat != undefined and depth <= 8 and (findItem acc mat) == 0 then
+		(
+			append acc mat
+			try
+			(
+				if (isProperty mat #baseMaterial) and mat.baseMaterial != undefined then
+					this.collectMaterialTree mat.baseMaterial (depth + 1) acc
+			)
+			catch()
+			try
+			(
+				if isProperty mat #materialList then
+					for i = 1 to mat.materialList.count where mat.materialList[i] != undefined do
+						this.collectMaterialTree mat.materialList[i] (depth + 1) acc
+			)
+			catch()
+			try
+			(
+				local n = getNumSubMtls mat
+				if n != undefined and n > 0 then
+					for i = 1 to n do
+					(
+						local sm = getSubMtl mat i
+						if sm != undefined then this.collectMaterialTree sm (depth + 1) acc
+					)
+			)
+			catch()
+		)
+		acc
+	),
+
 	public fn scanScene =
 	(
 		local entriesMap = #()
@@ -214,10 +243,16 @@ struct GlobalSequenceManager
 			try (this.collectController obj.scale.controller      (objName + ".Scale")      "Bone" &entriesMap) catch()
 			try (this.collectController obj.visibility.controller  (objName + ".Visibility") "Vis"  &entriesMap) catch()
 			
-			local mat = undefined
-			try (mat = obj.material) catch()
+			local objMat = undefined
+			try (objMat = obj.material) catch()
 			
-			if mat != undefined and (findItem scannedMaterials mat) == 0 then
+			-- Materialbaum flach einsammeln, damit auch Layer innerhalb einer
+			-- CompositeMaterial erfasst werden. Der Scan-Block darunter ist
+			-- unveraendert, er laeuft nur ueber mehr Materialien.
+			local matTree = #()
+			if objMat != undefined then this.collectMaterialTree objMat 0 matTree
+			
+			for mat in matTree where (findItem scannedMaterials mat) == 0 do
 			(
 				append scannedMaterials mat
 				local matName = if mat.name != undefined then mat.name else "Material"
@@ -253,6 +288,21 @@ struct GlobalSequenceManager
 				
 				try (this.collectIFL mat.texture matName &entriesMap) catch()
 			)
+
+			-- Modifier-Stack: Wc3VertexMod traegt die Geoset-Farbanimation (KGAC).
+			-- Die sitzt weder am Node noch am Material, sondern auf einem Modifier
+			-- (NeoDexSceneRebuilder.applyGeosetAnimations -> applyColorParameter
+			--  m "VertexColor"), wurde deshalb bisher nie erfasst.
+			try
+			(
+				for md in obj.modifiers where md != undefined do
+				(
+					if (classOf md) == Wc3VertexMod then
+						this.collectController md.VertexColor.controller \
+						                       (objName + ".VertexColor") "Color" &entriesMap
+				)
+			)
+			catch()
 		)
 		
 		for entry in entriesMap do
@@ -300,7 +350,6 @@ struct GlobalSequenceManager
 			if kCtrl.keys == undefined or kCtrl.keys.count < 2 then return()
 			
 			local kc = kCtrl.keys.count
-			format "DEBUG     scaleKeys class=% keys=% old=% new=%\n" (classOf kCtrl) kc oldLast newLast
 			-- Von hinten nach vorne (verhindert Sortierprobleme)
 			for k = kc to 1 by -1 do
 			(
@@ -309,7 +358,6 @@ struct GlobalSequenceManager
 				(
 					-- Letzter Key: EXAKT auf Ziel setzen
 					kCtrl.keys[k].time = newLast as time
-					format "DEBUG       key[%] %f -> %f (LAST)\n" k oldFrame newLast
 				)
 				else if oldFrame > 0 then
 				(
@@ -317,11 +365,8 @@ struct GlobalSequenceManager
 					local newFrame = ((oldFrame as float / oldLast as float) * newLast as float + 0.5) as integer
 					if newFrame < 1 then newFrame = 1
 					if newFrame >= newLast then newFrame = newLast - 1
-					format "DEBUG       key[%] %f -> %f\n" k oldFrame newFrame
 					kCtrl.keys[k].time = newFrame as time
 				)
-				else
-					format "DEBUG       key[%] %f -> 0f (KEEP)\n" k oldFrame
 			)
 		)
 		
@@ -374,20 +419,15 @@ struct GlobalSequenceManager
 		if oldFrame <= 0 then return false
 		if newFrame == oldFrame then return true
 		
-		format "\n===== DEBUG changeDuration =====\n"
-		format "DEBUG entryIndex=% oldFrame=% newFrame=%\n" entryIndex oldFrame newFrame
 		
 		for ctrlPair in entry[2] where ctrlPair[4] do
 		(
 			local ctrl = ctrlPair[1]
-			format "DEBUG   scaling '%' class=%\n" ctrlPair[2] (classOf ctrl)
 			this.scaleControllerKeys ctrl oldFrame newFrame
 		)
 		
 		-- Duration als exakten Frame speichern (kein Float-Drift)
 		entry[1] = newFrame as time
-		format "DEBUG   stored duration=%\n" entry[1]
-		format "===== DEBUG changeDuration END =====\n\n"
 		true
 	),
 	
@@ -427,11 +467,9 @@ struct GlobalSequenceManager
 					)
 				)
 				
-				format "DEBUG remove: desc=% ctrl=% keys=%\n" desc (classOf ctrl) (this.countControllerKeys ctrl)
 				this.deleteKeysAfterZero ctrl
-				format "DEBUG remove: after delete keys=%\n" (this.countControllerKeys ctrl)
 			)
-			catch(format "DEBUG remove ERROR: %\n" (getCurrentException()))
+			catch()
 		)
 		true
 	),
@@ -600,6 +638,39 @@ struct GlobalSequenceManager
 		)
 	),
 	
+	-- Sichert ein Objekt nachtraeglich, falls es beim Start der Aufnahme noch
+	-- nicht ausgewaehlt war. Ohne das bleiben Keys an Bones stehen, die erst
+	-- WAEHREND der Aufnahme gedreht wurden - Cancel erwischt sie sonst nicht,
+	-- weil beginRecording nur "selection as array" sichert.
+	fn ensureBackedUp obj =
+	(
+		if obj == undefined then return false
+		for e in this.savedTransforms do (if e[1] == obj then return false)
+		try
+		(
+			append this.savedEditKeys #(obj, "pos", this.backupControllerKeys obj.pos.controller)
+			append this.savedEditKeys #(obj, "rot", this.backupControllerKeys obj.rotation.controller)
+			append this.savedEditKeys #(obj, "scl", this.backupControllerKeys obj.scale.controller)
+			append this.savedTransforms #(obj, (at time 0 obj.transform), \
+			                              (classOf obj.pos.controller), \
+			                              (classOf obj.rotation.controller), \
+			                              (classOf obj.scale.controller))
+			appendIfUnique this.recordedObjects obj
+		)
+		catch (return false)
+		true
+	),
+
+	-- Wird vom #selectionSetChanged-Callback waehrend der Aufnahme gerufen.
+	-- Sichert jeden neu ausgewaehlten Bone, damit Cancel auch die Keys entfernt,
+	-- die erst nach dem Start entstanden sind.
+	public fn onRecordingSelectionChanged =
+	(
+		if not this.isRecording then return ok
+		for o in (selection as array) do (try (this.ensureBackedUp o) catch())
+		ok
+	),
+
 	public fn beginRecording duration ctrlType doPos doRot doScale editMode:false =
 	(
 		this.savedAnimRange = animationRange
@@ -618,6 +689,20 @@ struct GlobalSequenceManager
 		)
 		
 		-- Original-Transforms und Controller-Klassen speichern BEVOR Controller geändert werden
+		-- Auswahlwechsel waehrend der Aufnahme mitverfolgen.
+		-- #selectionSetChanged ist seit langem Bestandteil des Callback-Systems
+		-- und ab Max 2022 verfuegbar. persistent:false, damit der Callback nicht
+		-- mit der Szene gespeichert wird. Eigene ID nach unserer Konvention -
+		-- removeScripts wird nur auf genau diese ID angewendet.
+		try (callbacks.removeScripts id:#NeoDexGlobalSeqRec) catch()
+		try
+		(
+			callbacks.addScript #selectionSetChanged \
+				"try(::GlobalSequenceManager.onRecordingSelectionChanged())catch()" \
+				id:#NeoDexGlobalSeqRec persistent:false
+		)
+		catch()
+		
 		this.savedTransforms = #()
 		for obj in this.recordedObjects do
 		(
@@ -705,12 +790,9 @@ struct GlobalSequenceManager
 		
 		this.controllerSnapshot = this.takeSnapshot true true true
 		
-		format "\n===== DEBUG beginRecording =====\n"
-		format "DEBUG editMode=% snapshot entries=%\n" editMode this.controllerSnapshot.count
 		for s in this.controllerSnapshot do
 		(
 			local ctrl = case s[2] of ("pos": s[1].pos.controller; "rot": s[1].rotation.controller; "scl": s[1].scale.controller)
-			format "DEBUG   %: oldKeys=% ctrl=%\n" s[4] s[3] (classOf ctrl)
 		)
 		
 		this.isRecording = true
@@ -720,12 +802,14 @@ struct GlobalSequenceManager
 	
 	public fn finishRecording =
 	(
-		format "\n===== DEBUG finishRecording START =====\n"
-		format "DEBUG isEditMode=%\n" this.isEditMode
 		if not this.isRecording then
 		(
 			return #(#(), #())
 		)
+		
+		-- Letzte Auswahl noch erfassen, dann Callback abmelden
+		for o in (selection as array) do (try (this.ensureBackedUp o) catch())
+		try (callbacks.removeScripts id:#NeoDexGlobalSeqRec) catch()
 		
 		local newGlobals = #()
 		local warnings = #()
@@ -751,23 +835,16 @@ struct GlobalSequenceManager
 				local newCount = this.countControllerKeys ctrl
 				-- Im Edit-Modus: oldCount auf 0 setzen (alle Keys sind "neu")
 				local effectiveOld = if this.isEditMode then 0 else oldCount
-				format "DEBUG   %: ctrl=% oldKeys=% newKeys=% effectiveOld=%\n" ctrlName (classOf ctrl) oldCount newCount effectiveOld
 				if newCount > effectiveOld then
 				(
 					if effectiveOld > 1 then
 						append warnings ctrlName
 					this.setControllerORT ctrl #cycle
 					append newGlobals ctrlName
-					format "DEBUG   -> SET ORT #cycle\n"
-				)
-				else
-				(
-					format "DEBUG   -> SKIPPED\n"
 				)
 			)
 			catch
 			(
-				format "DEBUG   ERROR: %\n" (getCurrentException())
 			)
 		)
 		
@@ -780,8 +857,6 @@ struct GlobalSequenceManager
 		
 		if this.recordCtrlType == 2 then this.applyStepTangents()
 		
-		format "DEBUG newGlobals=% warnings=%\n" newGlobals.count warnings.count
-		format "===== DEBUG finishRecording END =====\n\n"
 		#(newGlobals, warnings)
 	),
 	
@@ -897,9 +972,11 @@ struct GlobalSequenceManager
 	(
 		if not this.isRecording then return()
 		
-		format "\n===== DEBUG cancelRecording mode=% =====\n" (if this.isEditMode then "EDIT" else "NEW")
-		format "DEBUG savedEditKeys count=%\n" this.savedEditKeys.count
 		sliderTime = 0
+		
+		-- Letzte Auswahl noch mitnehmen, dann Callback abmelden
+		for o in (selection as array) do (try (this.ensureBackedUp o) catch())
+		try (callbacks.removeScripts id:#NeoDexGlobalSeqRec) catch()
 		
 		-- IMMER Original-Controller wiederherstellen (Spin/assignControllers können sie geändert haben)
 		for entry in this.savedTransforms do
@@ -926,9 +1003,8 @@ struct GlobalSequenceManager
 					local newScl = this.createControllerFromClass origSclClass
 					if newScl != undefined then obj.scale.controller = newScl
 				)
-				format "DEBUG   restored controllers for %: pos=% rot=% scl=%\n" obj.name (classOf obj.pos.controller) (classOf obj.rotation.controller) (classOf obj.scale.controller)
 			)
-			catch(format "DEBUG   ctrl restore ERROR: %\n" (getCurrentException()))
+			catch()
 		)
 		
 		-- Keys aus Backup wiederherstellen (beide Modi)
@@ -937,7 +1013,6 @@ struct GlobalSequenceManager
 			local obj = entry[1]
 			local channel = entry[2]
 			local keyData = entry[3]
-			format "DEBUG   restoring %.% keyData entries=%\n" obj.name channel keyData.count
 			try
 			(
 				local ctrl = case channel of
@@ -946,11 +1021,48 @@ struct GlobalSequenceManager
 					"rot": obj.rotation.controller
 					"scl": obj.scale.controller
 				)
-				format "DEBUG   current ctrl=% keys=%\n" (classOf ctrl) (this.countControllerKeys ctrl)
 				this.restoreControllerKeys ctrl keyData
-				format "DEBUG   after restore keys=%\n" (this.countControllerKeys ctrl)
 			)
-			catch(format "DEBUG   RESTORE ERROR: %\n" (getCurrentException()))
+			catch()
+		)
+		
+		-- Ruhepose wiederherstellen.
+		--
+		-- startRecording sichert oben "at time 0 obj.transform" in
+		-- savedTransforms[2] - benutzt wurde davon bisher aber NUR die drei
+		-- Controller-Klassen. Die Matrix lag ungenutzt herum.
+		--
+		-- Das faellt auf, sobald ein Bone vor der Aufnahme GAR KEINE Keys hatte:
+		-- backupControllerKeys liefert dann ein leeres Array, restoreControllerKeys
+		-- loescht alle Keys und stellt nichts wieder her - der Controller behaelt
+		-- den Wert, den er im Moment des Abbruchs gerade hatte. Genau so verschiebt
+		-- sich die Ruhepose, und ein zweiter Versuch startet auf falscher Basis.
+		--
+		-- Deshalb hier: Objekte ohne Keys bekommen ihre gesicherte Matrix zurueck.
+		-- Objekte MIT Keys bleiben unangetastet, dort bestimmen die Keys die Pose.
+		for entry in this.savedTransforms do
+		(
+			try
+			(
+				local obj = entry[1]
+				local tm = entry[2]
+				if tm != undefined then
+				(
+					local hatKeys = false
+					for ch in #("pos", "rotation", "scale") while not hatKeys do
+					(
+						try
+						(
+							local c = getProperty obj ch
+							if c != undefined and (this.countControllerKeys c.controller) > 0 then hatKeys = true
+						)
+						catch()
+					)
+					if not hatKeys then
+						with animate off at time 0 (obj.transform = tm)
+				)
+			)
+			catch()
 		)
 		
 		animationRange = this.savedAnimRange
@@ -959,7 +1071,6 @@ struct GlobalSequenceManager
 		this.recordedObjects = #()
 		this.savedTransforms = #()
 		this.savedEditKeys = #()
-		format "===== DEBUG cancelRecording END =====\n\n"
 	),
 	
 	-- 360-Grad Spin Preset
@@ -995,26 +1106,40 @@ struct GlobalSequenceManager
 			try
 			(
 				local savedTM = at time 0 obj.transform
-				format "DEBUG savedTM pos=% rot=%\n" savedTM.pos savedTM.rotation
 				
 				if ctrlType == 3 then
 				(
 					-- === LINEAR PATH: Linear_Rotation mit 4 Segmenten à 90° ===
-					format "\n===== DEBUG Spin LINEAR =====\n"
-					format "DEBUG obj=% axis=% dir=% dur=%\n" obj.name axis direction dur
-					format "DEBUG current rot ctrl=% keys=%\n" (classOf obj.rotation.controller) (try(obj.rotation.controller.keys.count)catch("?"))
 					
 					-- Pos/Scale Keys sichern (werden durch Controller-Wechsel/animate on gestört)
 					local posBak = this.backupControllerKeys obj.pos.controller
 					local sclBak = this.backupControllerKeys obj.scale.controller
 					
+					-- Ausgangsdrehung LOKAL abgreifen, BEVOR der Controller ersetzt wird.
+					--
+					-- Frueher stand hier "savedTM.rotation", also die Rotation aus der
+					-- WELT-Transformmatrix. Ein Rotations-Controller erwartet seinen Wert
+					-- aber relativ zum Elternobjekt. Bei einem Bone ohne Parent ist beides
+					-- gleich - deshalb fiel es lange nicht auf. Haengt der Bone dagegen in
+					-- einer Kette, wird ihm die Weltdrehung als Lokaldrehung zugewiesen:
+					-- die Ruhepose springt auf eine voellig andere Ausrichtung, statt von
+					-- der bisherigen aus zu drehen.
+					-- Ausgangsdrehung im ELTERNRAUM abgreifen, bevor der Controller
+					-- ersetzt wird. "in coordsys parent obj.rotation" liefert genau das,
+					-- und zwar in MAXScripts rechtshaendiger Konvention - also passend
+					-- zu dem, was ein Rotations-Controller erwartet.
+					--
+					-- NICHT savedTM.rotation verwenden: das stammt aus der
+					-- Transformmatrix und ist laut Referenz LINKSHAENDIG gespeichert.
+					-- Ohne inverse() ergibt das eine voellig andere Ausrichtung - genau
+					-- das war der Grund, warum die Ruhepose weggesprungen ist.
+					-- Ohne Parent entspricht der Elternraum dem Weltraum.
+					local baseQ = (quat 0 0 0 1)
+					try (baseQ = at time 0 (in coordsys parent obj.rotation)) catch (baseQ = (quat 0 0 0 1))
+
 					obj.rotation.controller = Linear_Rotation()
 					local rc = obj.rotation.controller
 					try (deleteKeys rc #allKeys) catch()
-					
-					-- Base-Rotation als Quaternion
-					local baseQ = savedTM.rotation
-					format "DEBUG baseQ=%\n" baseQ
 					
 					-- 5 Keys: 0°, 90°, 180°, 270°, 359.5° (4 Segmente, jedes < 180°)
 					-- 359.5° statt 360° weil q und -q in Quaternion-Space identisch sind
@@ -1028,14 +1153,15 @@ struct GlobalSequenceManager
 						if step == segments then t = dur
 						local angle = stepAngles[step + 1] * direction
 						local rotQ = quat angle axis
+						-- Reihenfolge beachten: baseQ * rotQ dreht um die lokalen Achsen
+						-- des Bones. rotQ * baseQ waere um die Eltern-Achsen und ergibt
+						-- eine andere Bewegung.
 						local finalQ = baseQ * rotQ
 						-- addNewKey erzwingt Key-Erstellung (animate on merged manchmal)
 						local k = addNewKey rc t
 						k.value = finalQ
-						format "DEBUG   step % t=%f angle=% q=%\n" step t angle finalQ
 					)
 					
-					format "DEBUG keys after addNewKey=%\n" rc.keys.count
 					
 					-- Cycle ORT
 					this.setControllerORT rc #cycle
@@ -1044,8 +1170,6 @@ struct GlobalSequenceManager
 					this.restoreControllerKeys obj.pos.controller posBak
 					this.restoreControllerKeys obj.scale.controller sclBak
 					
-					format "DEBUG keys on rc=%\n" (try(rc.keys.count)catch("?"))
-					format "===== DEBUG Spin LINEAR END =====\n\n"
 				)
 				else
 				(
@@ -1528,7 +1652,6 @@ struct GlobalSequenceManager
 			undo "GlobalSeqMgr Spin CW" on
 			(
 				local spinEnd = (sliderTime.frame as integer)
-				format "\nDEBUG spinCW: sliderTime=% spinEnd=% ctrl=% recording=% editMode=%\n" sliderTime spinEnd ctrlDdl.selection recording spinApplied
 				if spinEnd < 1 then
 				(
 					format "GlobalSeqMgr: Move slider past frame 0.\n"
@@ -1557,7 +1680,6 @@ struct GlobalSequenceManager
 			undo "GlobalSeqMgr Spin CCW" on
 			(
 				local spinEnd = (sliderTime.frame as integer)
-				format "\nDEBUG spinCCW: sliderTime=% spinEnd=% ctrl=% recording=% editMode=%\n" sliderTime spinEnd ctrlDdl.selection recording spinApplied
 				if spinEnd < 1 then
 				(
 					format "GlobalSeqMgr: Move slider past frame 0.\n"

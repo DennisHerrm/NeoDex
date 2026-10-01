@@ -163,16 +163,49 @@ fn NeoDexExecuteImport model modelpath mode progressLabel progressBar =
 	NeoDexPostImportActions
 	Runs post-import actions like updating sequence manager and viewport settings.
 */
+global NeoDexViewportToggled = false
+
 fn NeoDexPostImportActions =
 (
 	-- Update Sequences in SequenceManager
 	try ::SequenceManager.sceneChangeCallback() catch()
 	
 	-- Viewport settings
-	actionMan.executeAction 0 "554"  -- Views: Viewport Visual Style Consistent Colors
+	--
+	-- "554" (Consistent Colors / Flat Color) ist entfernt - in dem Modus
+	-- wertet Nitrous Materialien gar nicht aus.
+	--
+	-- Verifizierte IDs (ueber actionMan-Enumeration in Max 2027):
+	--   0 "550"    Viewport Visual Style Shaded          (Default Shading)
+	--   0 "63545"  Viewport Materials Display as Shaded with Maps
+	--   0 "40607"  Viewport Visual Style Transparency Toggle
+	--
+	-- WICHTIG: Die Materialanzeige faellt nach Materialzuweisungen auf
+	-- "ohne Maps" zurueck. "63545" muss deshalb ganz zuletzt stehen und
+	-- wird nach einem vollstaendigen Redraw ein zweites Mal gesetzt -
+	-- sonst greift sie nicht, weil destroyDialog direkt davor den Fokus
+	-- verschiebt und die Action auf den aktiven Viewport wirkt.
+	fn ndxApplyViewportMaterialMode =
+	(
+		try ( actionMan.executeAction 0 "550" )   catch ()
+		try ( actionMan.executeAction 0 "63545" ) catch ()
+	)
+
 	actionMan.executeAction -844228238 "12"  -- Viewport Lighting and Shadows: High Quality
 	actionMan.executeAction -844228238 "17"  -- Viewport Lighting and Shadows: Progressive Skylight
-	actionMan.executeAction -844228238 "5"  -- Viewport Lighting and Shadows: Viewport Shadows Toggle
-	actionMan.executeAction -844228238 "0"  -- Viewport Lighting and Shadows: Viewport Shadows Ambient Occlusion Toggle
-	actionMan.executeAction 0 "63545"  -- Views: Viewport Materials Display as Shaded with Maps
+
+	-- "5" (Shadows) und "0" (Ambient Occlusion) sind TOGGLES, keine
+	-- Setzer. Beim zweiten Import in derselben Session haetten sie vorher
+	-- wieder ausgeschaltet.
+	if ::NeoDexViewportToggled != true do
+	(
+		actionMan.executeAction -844228238 "5"  -- Viewport Shadows Toggle
+		actionMan.executeAction -844228238 "0"  -- Ambient Occlusion Toggle
+		::NeoDexViewportToggled = true
+	)
+
+	ndxApplyViewportMaterialMode()
+	try ( forceCompleteRedraw() ) catch ()
+	ndxApplyViewportMaterialMode()
+	try ( redrawViews() ) catch ()
 )

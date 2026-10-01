@@ -882,7 +882,29 @@ struct NeoDexSceneRebuilderStruct
     fn DecodeBLPFile blpPath =
     (
         if not (doesFileExist blpPath) do return undefined
-        
+
+        -- Einmalige Faehigkeitspruefung.
+        -- Beim Start wurde keine blp.bmi gefunden - das heisst aber nicht, dass
+        -- Max kein BLP oeffnen kann: der Bitmap-I/O-Handler kann von einem
+        -- anderen Produkt stammen. Ohne diese Pruefung liefe jede einzelne
+        -- Textur ueber "cmd /c WhiteoutTexCLI.exe", also zwei Prozessstarts
+        -- plus Kopieren und Loeschen - gemessen rund 0,8 Sekunden pro Layer.
+        if not ::NeoDexNativeBLPTested then
+        (
+            ::NeoDexNativeBLPTested = true
+            local probe = undefined
+            try (probe = openBitmap blpPath) catch (probe = undefined)
+            if probe != undefined then
+            (
+                ::NeoDexHasNativeBLP = true
+                ::NeoDexNativeBLPSource = "Laufzeitpruefung (fremder Handler)"
+                try (close probe) catch()
+                format "NeoDex: Native BLP support confirmed at runtime\n"
+            )
+            else
+                format "NeoDex: Max cannot open BLP natively - using WhiteoutTexCLI\n"
+        )
+
         -- Native BLP support: Max can open .blp directly, no conversion needed
         if ::NeoDexHasNativeBLP then return blpPath
         
@@ -1190,6 +1212,35 @@ struct NeoDexSceneRebuilderStruct
 		layer.texture = bm
 		try showTextureMap layer layer.texture true catch()
 		layer.showinviewport = true
+
+		-- UV-Set des Layers zuordnen.
+		-- MDX-Layer tragen ein coordId-Feld, das angibt, welches UV-Set des
+		-- Geosets sie benutzen. Beide Reader legen es bereits 1-basiert ab
+		-- (NeoDexMDXReader.ms:197, NeoDexReaderReforge1200.ms:189), was genau
+		-- Max' mapChannel entspricht: Kanal 1 = erstes UV-Set.
+		-- Ohne diese Zuweisung landen ALLE Layer auf Kanal 1. Bei Modellen mit
+		-- zwei UV-Sets - etwa einem eingebackenen Schatten auf eigener
+		-- Belegung - wird der zweite Layer dann mit der UV des ersten
+		-- dargestellt. Die Geometrie bringt die Kanaele bereits mit
+		-- (createMeshWc3 legt sie ueber meshop.setNumMaps an).
+		-- Steht nach der Texturzuweisung, weil der on-texture-set-Handler des
+		-- Plugins die coords zurueecksetzen kann - gleiche Begruendung wie bei
+		-- den Wrap-Flags darunter.
+		if bm != undefined then
+		(
+			local uvChan = 1
+			try
+			(
+				if data.coordId != undefined then
+				(
+					local c = data.coordId as integer
+					if c >= 1 and c <= 99 then uvChan = c
+				)
+			)
+			catch()
+			try (bm.coords.mapChannel = uvChan) catch()
+		)
+
 		-- Re-apply wrap flags after texture assignment
 		-- (on texture set handler overwrites them from delegate defaults)
 		if data.textures.type == #Static and data.textures.data != undefined then
@@ -1294,22 +1345,86 @@ struct NeoDexSceneRebuilderStruct
                         if isProperty sub #PriorityPlane then
                             sub.PriorityPlane = m.priorityPlane
                         this.createLayer sub l m2
-                        m2.mapEnables[j] = true
                         m2.materialList[j] = sub
-                        
-                        -- Viewport-Fix: Composite Layer Blend-Einstellungen
-                        if l.filtermode >= 4 and l.filtermode <= 5 then
+
+                        -- WICHTIG: materialList und die Steuer-Arrays sind
+                        -- um eins versetzt. materialList[1] ist das
+                        -- Basismaterial (Alias baseMaterial), die Sub-
+                        -- Materialien sind materialList[2..N]. mapEnables,
+                        -- mixType und amount haben nur N-1 Eintraege und
+                        -- beziehen sich auf die Sub-Materialien, also gilt
+                        --     mixType[k]  <->  materialList[k+1]
+                        --
+                        -- Das Basismaterial (j == 1) hat keinen Eintrag in
+                        -- den Steuer-Arrays und braucht auch keinen.
+                        if j > 1 do
                         (
                             try
                             (
-                                m2.mixType[j] = 1
-                                m2.amount[j] = 50.0
+                                m2.mapEnables[j - 1] = true
+
+                                -- mixType: 0 = Additive, 1 = Subtractive,
+                                -- 2 = Mix. Fuer WC3-Additive (Filtermode 4
+                                -- und 5) ist 0 richtig - vorher stand hier
+                                -- 1, also Subtractive, was additive Layer
+                                -- abgezogen statt addiert hat.
+                                if l.filtermode >= 4 and l.filtermode <= 5 then
+                                (
+                                    m2.mixType[j - 1] = 0
+                                    m2.amount[j - 1]  = 100.0
+                                )
+                                else
+                                (
+                                    m2.mixType[j - 1] = 2      -- Mix
+                                    m2.amount[j - 1]  = 100.0
+                                )
                             ) catch()
                         )
                     )
                 )
             )
             m2.name = matName + (i as string)
+
+            -- showInViewport wurde bisher nirgends gesetzt. Ohne dieses
+            -- Flag zeigt Nitrous das Material gar nicht an - das Modell
+            -- bleibt grau, unabhaengig von Filtermode und Viewport-Modus.
+            -- Muss sowohl am Composite als auch an jedem Sublayer und
+            -- dessen Delegate gesetzt werden.
+            try ( m2.showInViewport = on ) catch ()
+            try
+            (
+                for si = 1 to m2.materialList.count do
+                (
+                    local sm = m2.materialList[si]
+                    if sm != undefined do
+                    (
+                        try ( sm.showInViewport = on ) catch ()
+                        local sd = try(sm.delegate)catch(undefined)
+                        if sd != undefined do
+                        (
+                            try ( sd.showInViewport = on ) catch ()
+                            local sdm = try(sd.diffuseMap)catch(undefined)
+                            if sdm != undefined and sd.diffuseMapEnable do
+                                try ( showTextureMap sd sdm on ) catch ()
+                        )
+                    )
+                )
+            )
+            catch ()
+            -- Einzelmaterial-Pfad: kein materialList, dann direkt.
+            try
+            (
+                local d2 = try(m2.delegate)catch(undefined)
+                if d2 != undefined do
+                (
+                    try ( d2.showInViewport = on ) catch ()
+                    local dm2 = try(d2.diffuseMap)catch(undefined)
+                    if dm2 != undefined and d2.diffuseMapEnable do
+                        try ( showTextureMap d2 dm2 on ) catch ()
+                )
+            )
+            catch ()
+
             m.maxObj = m2
             if (i < 25) then
             (
@@ -2636,7 +2751,7 @@ struct NeoDexSceneRebuilderStruct
                     p.baseColor    = c
                     p.YS_baseColor = c
                 )
-            ) catch()
+            ) catch (try (::ErrorReporter.logWarning "Import" "SceneRebuilder.createCornEmitter" (getCurrentException())) catch())
         )
 
         -- Event Flags parsen (FIX: =on/=off korrekt auswerten, rawFlags speichern)

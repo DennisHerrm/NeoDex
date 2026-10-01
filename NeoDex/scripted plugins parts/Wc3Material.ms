@@ -69,10 +69,224 @@ extends:Standard replaceUI:true version:5
 			delegate.Ambient = defaultAmbient
 		)
 	)
+	-- ================================================================
+	-- WC3-Filtermode-Darstellung (gegen die MDX-Spezifikation geprueft)
+	--   1 None  opak | 2 Transparent  Alphatest 0.75 | 3 Blend  Alpha
+	--   4 Additive / 5 Add Alpha  SRC_ALPHA/ONE  (identisch)
+	--   6 Modulate  ZERO/SRC_COLOR | 7 Modulate2X  DST_COLOR/SRC_COLOR
+	--
+	-- Zwei Grundsaetze, beide aus Regressionen gelernt:
+	--
+	-- 1. Die Diffuse-Map wird nicht ersetzt. adjustMapping hat sie
+	--    gesetzt (Team Color, Glow, IFL) - nur Modulate schaltet sie
+	--    kurz ab und stellt den Zustand wieder her.
+	--
+	-- 2. Es werden KEINE Kopien der Textur angelegt. Diffuse- und
+	--    Opacity-Slot teilen sich dieselbe Instanz, so wie es
+	--    generateOpacity schon immer gemacht hat. Nur so bleibt eine
+	--    IFL-Animation synchron. monoOutput und alphaSource steuern
+	--    lediglich den Mono- bzw. Alphaausgang, der RGB-Ausgang fuers
+	--    Diffuse bleibt davon unberuehrt.
+	-- ================================================================
+
+	-- Stellt die Textur als Alphamaske ein (fuer Transparent / Blend).
+	fn ndxUseAlphaChannel tex =
+	(
+		if classof tex != Bitmaptexture do return false
+		tex.alphaSource = 0		-- Image Alpha
+		tex.monoOutput  = 1		-- Alpha als Mono ausgeben
+		true
+	)
+
+	-- Stellt die Textur als Luminanzmaske ein (fuer Additive).
+	--
+	-- Bewusst immer die Luminanz, auch wenn ein Alphakanal existiert:
+	-- WC3 rechnet out = bg + tex*alpha, schwarze Texturstellen tragen
+	-- also nichts bei. Nimmt man den Alphakanal, verdunkeln dunkle
+	-- Stellen mit hohem Alpha stattdessen den Hintergrund - das Gegenteil
+	-- von additiv, und der Grund, warum Additive vorher wie Blend aussah.
+	fn ndxUseLuminance tex =
+	(
+		if classof tex != Bitmaptexture do return false
+		tex.alphaSource = 2		-- None (Opaque), Alpha ignorieren
+		tex.monoOutput  = 0		-- RGB-Intensitaet
+		true
+	)
+
+	-- Alphatest bei 0.75 fuer Filtermode 2.
+	--
+	-- Die steile Rampe darf NICHT auf die Textur selbst gelegt werden -
+	-- deren Output-Sektion wirkt auf RGB- und Mono-Ausgang gleichzeitig
+	-- und wuerde das Diffuse mit verbiegen. Stattdessen eine Mix-Map
+	-- daruebergelegt: sie referenziert dieselbe Instanz (IFL laeuft also
+	-- weiter) und bringt ihre eigene Mischkurve mit.
+	--
+	-- useCurve mit lower == upper == 0.75 ergibt eine harte Kante:
+	-- unter 0.75 vollstaendig transparent, darueber voll deckend.
+	fn ndxAlphaTestMask tex =
+	(
+		if classof tex != Bitmaptexture do return undefined
+		ndxUseAlphaChannel tex
+		local res = undefined
+		try
+		(
+			local mx = Mix ()
+			mx.name           = tex.name + "_atest"
+			mx.color1         = color 0 0 0
+			mx.color2         = color 255 255 255
+			mx.mask           = tex
+			mx.maskEnabled    = on
+			-- .lower und .upper (NICHT lowerThreshold/upperThreshold).
+			-- Laut Doku ergeben identische Werte eine definierte Kante -
+			-- also ein echter Alphatest, keine Naeherung.
+			mx.useCurve = on
+			mx.lower    = 0.75
+			mx.upper    = 0.75
+			res = mx
+		)
+		catch ( res = undefined )
+		res
+	)
+
+	-- (1 - Luminanz) fuer Modulate. output.invert wirkt auf dem
+	-- Opacity-Kanal nicht, daher eine Mix-Map: color1 kommt bei mask=0,
+	-- color2 bei mask=1. Die Maske zeigt auf DIESELBE Texturinstanz,
+	-- die IFL-Animation laeuft also mit.
+	fn ndxInverseLumMask tex scale:1.0 =
+	(
+		if classof tex != Bitmaptexture do return undefined
+		ndxUseLuminance tex
+		local res = undefined
+		try
+		(
+			local mx = Mix ()
+			mx.name        = tex.name + "_invlum"
+			mx.color1      = color (255 * scale) (255 * scale) (255 * scale)
+			mx.color2      = color 0 0 0
+			mx.mask        = tex
+			mx.maskEnabled = on
+			res = mx
+		)
+		catch ( res = undefined )
+		res
+	)
+
 	-- Configures viewport opacity display based on WC3 filter mode.
 	-- val: 1=None, 2=Transparent, 3=Blend, 4=Additive, 5=Additive2x, 6=Modulate, 7=Modulate2x
 	fn adjustFilterMode val =
 	(
+		local ndxOk = false
+		try
+		(
+			-- Farbwerte wie im bisherigen Code, damit sich die Helligkeit
+			-- der Materialien nicht aendert.
+			local grayDiffuse = color 92 92 92
+			local grayAmbient = color 150 150 150
+
+			-- Quelle ist das, was tatsaechlich angezeigt wird. Bei
+			-- IFL-Animationen ist this.texture nicht zwingend gesetzt.
+			local srcTex = delegate.diffuseMap
+			if classof srcTex != Bitmaptexture do srcTex = this.texture
+			if classof srcTex != Bitmaptexture do srcTex = undefined
+
+			local baseDiffuseOn = delegate.diffuseMapEnable
+
+			delegate.opacity          = 100.0
+			delegate.opacityMapEnable = off
+			delegate.filterMapEnable  = off
+			delegate.filterColor      = color 255 255 255
+			delegate.opacityType      = 0
+			delegate.Diffuse          = grayDiffuse
+			delegate.Ambient          = grayAmbient
+			delegate.diffuseMapEnable = baseDiffuseOn
+
+			if val == 1 or srcTex == undefined then
+			(
+				-- Opak, oder keine brauchbare Quelle: nichts weiter tun.
+				delegate.opacityMapEnable = off
+			)
+			else
+			(
+				case val of
+				(
+					-- Transparent: Alphatest bei 0.75 ueber eine
+					-- Mix-Map mit enger Mischkurve. Faellt sie aus,
+					-- Rueckfall auf weiches Alpha wie bei Blend.
+					2: (
+						local m = ndxAlphaTestMask srcTex
+						if m != undefined then
+						(
+							delegate.opacityMap       = m
+							delegate.opacityMapEnable = on
+						)
+						else if ndxUseAlphaChannel srcTex do
+						(
+							delegate.opacityMap       = srcTex
+							delegate.opacityMapEnable = on
+						)
+					)
+					3: (
+						if ndxUseAlphaChannel srcTex do
+						(
+							delegate.opacityMap       = srcTex
+							delegate.opacityMapEnable = on
+						)
+					)
+					4: (
+						if ndxUseLuminance srcTex do
+						(
+							delegate.opacityMap       = srcTex
+							delegate.opacityMapEnable = on
+							delegate.opacityType      = 2
+							delegate.Diffuse          = color 0 0 0
+							delegate.Ambient          = color 0 0 0
+						)
+					)
+					5: (
+						if ndxUseLuminance srcTex do
+						(
+							delegate.opacityMap       = srcTex
+							delegate.opacityMapEnable = on
+							delegate.opacityType      = 2
+							delegate.Diffuse          = color 0 0 0
+							delegate.Ambient          = color 0 0 0
+						)
+					)
+					6: (
+						local m = ndxInverseLumMask srcTex scale:1.0
+						if m != undefined do
+						(
+							delegate.opacityMap       = m
+							delegate.opacityMapEnable = on
+							delegate.diffuseMapEnable = off
+							delegate.Diffuse          = color 0 0 0
+							delegate.Ambient          = color 0 0 0
+						)
+					)
+					7: (
+						local m = ndxInverseLumMask srcTex scale:0.5
+						if m != undefined do
+						(
+							delegate.opacityMap       = m
+							delegate.opacityMapEnable = on
+							delegate.diffuseMapEnable = off
+							delegate.Diffuse          = color 0 0 0
+							delegate.Ambient          = color 0 0 0
+						)
+					)
+					default: ( )
+				)
+			)
+			ndxOk = true
+		)
+		catch
+		(
+			format "NeoDex: adjustFilterMode fehlgeschlagen (%), nutze Fallback\n" \
+				(getCurrentException())
+		)
+		if ndxOk do return true
+
+		-- ---------- ab hier der bisherige Rumpf, unveraendert ----------
 		-- Helper: configure bitmap opacity channel output
 		fn configureBitmapOpacity bmpTex mono alpha =
 		(
@@ -1985,11 +2199,21 @@ public class BLPHelper
 		on SQAnim_Many_btn pressed do
 		(
 			local iniPath = getdir #userscripts + "\\InitialDir.ini"
-			local startDir = undefined
-			if doesFileExist iniPath then
-				startDir = getINISetting iniPath "InitialDir" "MatSequenceDir"
-			else
-				setINISetting iniPath "InitialDir" "MatSequenceDir" "C:\\Users\\Administrator\\Desktop"
+			-- Der Startordner MUSS ein gueltiger String sein: getSavePath wirft
+			-- bei initialDir:undefined "Unable to convert: undefined to type: FileName".
+			-- Frueher blieb startDir undefined, wenn die INI noch nicht existierte -
+			-- also beim allerersten Klick. Ebenso, wenn der Schluessel fehlte.
+			local startDir = ""
+			try
+			(
+				if doesFileExist iniPath then
+					startDir = getINISetting iniPath "InitialDir" "MatSequenceDir"
+			)
+			catch (startDir = "")
+			if startDir == undefined then startDir = ""
+			-- Nicht mehr vorhandener Ordner: auf den Desktop zurueckfallen
+			if startDir == "" or not (doesFileExist startDir) then
+				startDir = try (getdir #maxroot) catch ("")
 			
 			local chosenPath = getSavePath caption:"Select a folder to store multiple sequence frames" initialDir:startDir
 			if chosenPath != undefined do

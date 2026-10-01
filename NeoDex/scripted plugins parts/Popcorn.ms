@@ -52,7 +52,9 @@ parameters main rollout:params2
 
 	fn adjustColor_PS baseColor hueShift satShift brightShift =
 	(
-		::LxXUtils.AdjustColor_PS baseColor hueShift satShift brightShift
+		-- Delegate to the global Photoshop-compatible HSB color adjustment
+		-- (defined in NeoDex GlobalFN / ::NeoDexUtils)
+		::NeoDexUtils.AdjustColor_PS baseColor hueShift satShift brightShift
 	)
 
 	-----------------------------------Import Popcorn configuration parameters-----------------------------------

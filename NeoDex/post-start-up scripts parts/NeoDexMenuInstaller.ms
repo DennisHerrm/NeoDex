@@ -2,9 +2,9 @@ fn InstallNeoDexMenu =
 (
 	fn isMenuInMainBar main ndMenu =
 	(
-		result = false
+		local result = false
 		local n = main.numItems()
-		for i = 1 to n do
+		for i = 1 to n while not result do
 		(
 			local it = main.getItem i
 			if (it.getSubMenu ()) == ndMenu then result = true
@@ -20,6 +20,7 @@ fn InstallNeoDexMenu =
     
 	local main = menuMan.getMainMenuBar()
 	local neoDexMain = menuMan.findMenu "NeoDex"
+	local subNeoDex
 
 	if neoDexMain == undefined then
 	(
@@ -46,7 +47,18 @@ fn InstallNeoDexMenu =
 	local aboutItem = menuMan.createActionItem "NeoDex_About" "NeoDex Toolkit"
 
 	-- Extra Tools submenu
-	local extraMenu = menuMan.createMenu "Extra Tools"
+	-- menuMan.createMenu registers a NEW menu in the permanent menu database on
+	-- every call. The main menu above is guarded with findMenu; this one was not,
+	-- so each 3ds Max start left another orphaned copy behind. Reuse and clear it.
+	-- Registered under a NeoDex-specific name ("NeoDex Extra Tools") so we cannot
+	-- hijack a menu that another plugin registered under the generic "Extra Tools".
+	-- The displayed caption stays "Extra Tools" - that comes from createSubMenuItem.
+	local extraMenu = menuMan.findMenu "NeoDex Extra Tools"
+	if extraMenu == undefined then
+		extraMenu = menuMan.createMenu "NeoDex Extra Tools"
+	else
+		cleanMenu extraMenu
+
 	local kfOptimizerItem = menuMan.createActionItem "NeoDex_KeyframeOptimizer" "NeoDex Toolkit"
 	local cellShadeItem = menuMan.createActionItem "NeoDex_CellShadeCreator" "NeoDex Toolkit"
 	extraMenu.addItem kfOptimizerItem -1

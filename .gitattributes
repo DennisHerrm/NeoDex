@@ -1,2 +1,14 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Binaries
+*.exe  binary
+*.dll  binary
+*.bmi  binary
+*.dat  binary
+*.png  binary
+*.bmp  binary
+*.tga  binary
+*.blp  binary
+*.dds  binary
+*.mdx  binary

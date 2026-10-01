@@ -401,7 +401,13 @@ rollout Wc3CellShadeCreator "Wc3 Cell Shade Creator" width:192 height:360
         ctrl.Cursor = (dotNetClass "System.Windows.Forms.Cursors").Hand
     )
 
+    fn swClick idx = ( setCurrentColor swColors[idx] )
+
     -- Swatch events
+    -- NOTE: swClick must be defined ABOVE these handlers. MAXScript resolves names
+    -- inside a rollout in a single pass, so a handler body that references a function
+    -- declared further down compiles against 'undefined' and fails at click time with
+    -- "Call needs function or class, got: undefined".
     on sw1 MouseEnter s e do sw1.Image = swBmpsHover[1] ; on sw1 MouseLeave s e do sw1.Image = swBmpsNormal[1] ; on sw1 MouseClick s e do swClick 1
     on sw2 MouseEnter s e do sw2.Image = swBmpsHover[2] ; on sw2 MouseLeave s e do sw2.Image = swBmpsNormal[2] ; on sw2 MouseClick s e do swClick 2
     on sw3 MouseEnter s e do sw3.Image = swBmpsHover[3] ; on sw3 MouseLeave s e do sw3.Image = swBmpsNormal[3] ; on sw3 MouseClick s e do swClick 3
@@ -410,8 +416,6 @@ rollout Wc3CellShadeCreator "Wc3 Cell Shade Creator" width:192 height:360
     on sw6 MouseEnter s e do sw6.Image = swBmpsHover[6] ; on sw6 MouseLeave s e do sw6.Image = swBmpsNormal[6] ; on sw6 MouseClick s e do swClick 6
     on sw7 MouseEnter s e do sw7.Image = swBmpsHover[7] ; on sw7 MouseLeave s e do sw7.Image = swBmpsNormal[7] ; on sw7 MouseClick s e do swClick 7
     on sw8 MouseEnter s e do sw8.Image = swBmpsHover[8] ; on sw8 MouseLeave s e do sw8.Image = swBmpsNormal[8] ; on sw8 MouseClick s e do swClick 8
-
-    fn swClick idx = ( setCurrentColor swColors[idx] )
 
     -- Color picker
     on pnlColor MouseClick s e do

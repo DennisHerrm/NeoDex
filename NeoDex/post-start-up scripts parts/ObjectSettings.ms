@@ -1,8 +1,8 @@
 struct ObjectSettings
 (
-	isPoppedOut = false,
-	savedIndex = undefined,
-	mainRollout = rollout mainRollout "Settings" width:440 height:232
+	public isPoppedOut = false,
+	public savedIndex = undefined,
+	public mainRollout = rollout mainRollout "Settings" width:440 height:232
 	(
 		button popOutBtn "Undock" pos:[379, 2] width:56 height:18 tooltip:"Undock / Dock"
 		
@@ -38,9 +38,9 @@ struct ObjectSettings
 		on bbLockZChk changed newState do
 			for s in selection do setUserProp s "BillboardedLockZ" (B2I newState)
 		on cameraChk changed newState do
-			for s in selection do setUserProp s "CameraAnchored" (::WdxUtils.B2I newState)
+			for s in selection do setUserProp s "CameraAnchored" (::Utils.B2I newState)
 		on selectChk changed newState do
-			for s in selection do setUserProp s "Unselectable" (::WdxUtils.B2I newState)
+			for s in selection do setUserProp s "Unselectable" (::Utils.B2I newState)
 		on dontInhTransChk changed newState do
 			for s in selection do
 			(
@@ -74,37 +74,37 @@ struct ObjectSettings
 				::ObjectSettings.isPoppedOut = false
 				try ( destroyDialog mainRollout ) catch()
 				
-				if ::whiteoutdexManagerFloater != undefined and ::whiteoutdexManagerFloater.open then
+				if ::neodexManagerFloater != undefined and ::neodexManagerFloater.open then
 				(
-					local rollouts = ::whiteoutdexManagerFloater.rollouts
+					local rollouts = ::neodexManagerFloater.rollouts
 					local idx = ::ObjectSettings.savedIndex
 					if idx != undefined and idx <= rollouts.count then
 					(
 						local movedRollouts = #()
 						for i = rollouts.count to idx by -1 do
 						(
-							if rollouts[i].title != "WhiteoutDex Manager Floater Rollout" then
+							if rollouts[i].title != "Neodex Manager Floater Rollout" then
 							(
 								append movedRollouts rollouts[i]
-								removeRollout rollouts[i] ::whiteoutdexManagerFloater
+								removeRollout rollouts[i] ::neodexManagerFloater
 							)
 						)
-						addRollout mainRollout ::whiteoutdexManagerFloater
+						addRollout mainRollout ::neodexManagerFloater
 						for i = movedRollouts.count to 1 by -1 do
-							addRollout movedRollouts[i] ::whiteoutdexManagerFloater
+							addRollout movedRollouts[i] ::neodexManagerFloater
 					)
 					else
-						addRollout mainRollout ::whiteoutdexManagerFloater
+						addRollout mainRollout ::neodexManagerFloater
 				)
 				return()
 			)
 			
-			if ::whiteoutdexManagerFloater != undefined and ::whiteoutdexManagerFloater.open then
+			if ::neodexManagerFloater != undefined and ::neodexManagerFloater.open then
 			(
-				local rollouts = ::whiteoutdexManagerFloater.rollouts
+				local rollouts = ::neodexManagerFloater.rollouts
 				for i = 1 to rollouts.count do
 					if rollouts[i] == mainRollout then ( ::ObjectSettings.savedIndex = i; exit )
-				removeRollout mainRollout ::whiteoutdexManagerFloater
+				removeRollout mainRollout ::neodexManagerFloater
 			)
 			
 			::ObjectSettings.isPoppedOut = true
@@ -124,19 +124,19 @@ struct ObjectSettings
 					s.Stop(); s.Dispose()
 					try
 					(
-						if ::whiteoutdexManagerFloater != undefined and ::whiteoutdexManagerFloater.open then
+						if ::neodexManagerFloater != undefined and ::neodexManagerFloater.open then
 						(
 							local rl = ::ObjectSettings.mainRollout
 							local idx = ::ObjectSettings.savedIndex
-							local rollouts = ::whiteoutdexManagerFloater.rollouts
+							local rollouts = ::neodexManagerFloater.rollouts
 							if idx != undefined and idx <= rollouts.count then
 							(
 								local moved = #()
-								for i = rollouts.count to idx by -1 do (if rollouts[i].title != "WhiteoutDex Manager Floater Rollout" then (append moved rollouts[i]; removeRollout rollouts[i] ::whiteoutdexManagerFloater))
-								addRollout rl ::whiteoutdexManagerFloater
-								for i = moved.count to 1 by -1 do addRollout moved[i] ::whiteoutdexManagerFloater
+								for i = rollouts.count to idx by -1 do (if rollouts[i].title != "Neodex Manager Floater Rollout" then (append moved rollouts[i]; removeRollout rollouts[i] ::neodexManagerFloater))
+								addRollout rl ::neodexManagerFloater
+								for i = moved.count to 1 by -1 do addRollout moved[i] ::neodexManagerFloater
 							)
-							else addRollout rl ::whiteoutdexManagerFloater
+							else addRollout rl ::neodexManagerFloater
 						)
 					) catch()
 				))
@@ -179,10 +179,7 @@ struct ObjectSettings
 		)
 	),
 
-	-- Alias for NeoDex compatibility (NeoDex callbacks may reference this name)
-	fn neoDexSTLoadFNSettings = (this.whiteoutDexSTLoadFNSettings()),
-
-	fn whiteoutDexSTLoadFNSettings =
+	public fn neoDexSTLoadFNSettings =
 	(
 		if not this.mainRollout.open then return()
 
@@ -218,7 +215,7 @@ struct ObjectSettings
 		for s in selection do
 		(
 			-- Alte "Billboard" Property migrieren falls vorhanden
-			try ( ::WdxUtils.getBillboardFlags s ) catch()
+			try ( ::Utils.getBillboardFlags s ) catch()
 			
 			bbFull  = tmp bbFull  (tmp2 s "Billboarded")
 			bbLockX = tmp bbLockX (tmp2 s "BillboardedLockX")
@@ -292,9 +289,9 @@ struct ObjectSettings
 
 	on create do
 	(
-		this.whiteoutDexSTLoadFNSettings()
-		callbacks.removeScripts id:#WhiteoutDexObjectSettings
-		callbacks.addscript #selectionSetChanged "::ObjectSettings.whiteoutDexSTLoadFNSettings()" id:#WhiteoutDexObjectSettings
+		this.neoDexSTLoadFNSettings()
+		callbacks.removeScripts id:#NeoDexObjectSettings
+		callbacks.addscript #selectionSetChanged "::ObjectSettings.neoDexSTLoadFNSettings()" id:#NeoDexObjectSettings
 	)
 )
 global ObjectSettings = ObjectSettings()

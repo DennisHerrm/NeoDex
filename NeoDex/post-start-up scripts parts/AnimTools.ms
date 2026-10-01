@@ -96,6 +96,34 @@ struct NeoDexBoneFinder
             if this.isWholeWord parts pw then
                 score -= 5
         )
+
+        -- Angehaengte Suffixe erwischt isWholeWord nicht: Biped nennt seine
+        -- Endpunkte "Bip001 HeadNub", "Bip001 L Toe0Nub", "Bip001 L Finger0Nub".
+        -- filterString zerlegt das zu #("bip001","headnub") - "nub" ist dort
+        -- kein eigenes Wort, der Abzug oben griff also nie. Ergebnis: der Nub
+        -- gewann gegen den echten Bone, das One-Click-Tool parentete
+        -- Attachment Points an Biped-Endpunkte, und die haben einen
+        -- BipDriven_Control, dessen transform.controller nicht lesbar ist.
+        -- Genau das brach den Export ab.
+        -- "end" bewusst NICHT in der Liste: ein Bone wie "Hand Bend"
+        -- wuerde sonst faelschlich bestraft. "nub"/"tip"/"effector" sind
+        -- eindeutig genug.
+        for sfx in #("nub", "tip", "effector") do
+        (
+            for part in parts do
+            (
+                local pl = part.count
+                local sl = sfx.count
+                if pl > sl do
+                (
+                    if (substring part (pl - sl + 1) sl) == sfx do
+                    (
+                        score -= 5
+                        exit
+                    )
+                )
+            )
+        )
         
         -- Bonus für kürzere Namen (eher der eigentliche Bone als ein Hilfsobjekt)
         if parts.count <= 2 then score += 3
@@ -363,8 +391,11 @@ struct AnimTools
         groupBox smoothRotationsGrpB "Smooth Rotations" pos:[296, 22] width:138 height:110
         button fixSquadbtn "Fix non-linear\nrotation problems\non selection" pos:[304,38] width:122 height:86 tooltip:"Non-linear rotation keys may animate improperly in wc3 if they go beyond 90\xC2\xB0. This tool will apply fixes to those keys by creating a new key between them. Note that you may have to run the tool more than once in some weird occasions where you created rotations of over 180\xC2\xB0"
 
-		groupBox boneToolsGrpB "Bone Tools" pos:[8, 136] width:426 height:46
-		button createAttachmentPointsBtn "Create Attachment Points" pos:[16, 152] width:410 height:22 tooltip:"Automatically create Attachment Points for Bones that have known names."
+		groupBox boneToolsGrpB "One Click Tools" pos:[8, 136] width:426 height:98
+		button createAttachmentPointsBtn "One Click Attachment Points" pos:[16, 152] width:410 height:22 tooltip:"Automatically create Attachment Points for Bones that have known names."
+		button createPortraitCamBtn "One Click Portrait Camera" pos:[16, 178] width:410 height:22 tooltip:"Creates a portrait camera framing the selected object. Without a selection the upper part of the model is used as the head."
+		button createCollSphereBtn "One Click Collision Spheres" pos:[16, 204] width:202 height:22 tooltip:"Creates two collision spheres sized from the model, as Blizzard does for units."
+		button createCollBoxBtn "One Click Collision Box" pos:[224, 204] width:202 height:22 tooltip:"Creates a collision box sized from the model, as Blizzard does for buildings."
 		
         -- Funktionen
         mapped fn setContinuityToZero o time &controllerFunc =
@@ -646,6 +677,183 @@ struct AnimTools
         
         on fixSquadbtn pressed do fixSquadRotation selection
 			
+		-- Layer wie beim Import zuweisen. Der SceneRebuilder legt dieselben
+		-- Namen an: "Cameras" (Z.3400) und "Collision Objects" (Z.2885).
+		fn putInLayer objs layerName =
+		(
+			try
+			(
+				local ly = LayerManager.getLayerFromName layerName
+				if ly == undefined then ly = LayerManager.newLayerFromName layerName
+				if ly != undefined then for o in objs where isValidNode o do ly.addNode o
+			)
+			catch()
+			ok
+		)
+
+		-- Bounding-Box ueber alle sichtbaren Geometrie-Objekte
+		fn getModelBounds =
+		(
+			local lo = undefined
+			local hi = undefined
+			-- "at time 0" statt sliderTime: nodeGetBoundingBox wertet im
+			-- aktuellen Zeitkontext aus. Ein blosses Setzen von sliderTime
+			-- reicht dafuer nicht zuverlaessig - steht das Modell auf einem
+			-- Animationsframe, kaeme die Groesse der laufenden Animation
+			-- heraus statt der Initial-Pose. "at time" setzt den Kontext
+			-- direkt und laesst den Slider des Nutzers in Ruhe.
+			at time 0
+			for obj in objects where superClassOf obj == GeometryClass and not obj.isHidden do
+			(
+				try
+				(
+					local bb = nodeGetBoundingBox obj (matrix3 1)
+					if lo == undefined then ( lo = bb[1] ; hi = bb[2] )
+					else
+					(
+						lo = [ amin lo.x bb[1].x, amin lo.y bb[1].y, amin lo.z bb[1].z ]
+						hi = [ amax hi.x bb[2].x, amax hi.y bb[2].y, amax hi.z bb[2].z ]
+					)
+				)
+				catch()
+			)
+			if lo == undefined then #([-50,-50,0],[50,50,100]) else #(lo, hi)
+		)
+
+		on createPortraitCamBtn pressed do
+		(
+			-- Werte aus Blizzards eigenen Portrait-Modellen abgeleitet
+			-- (Footman, Knight, Arthas):
+			--   FoV        45 Grad  (3 von 4 Modellen)
+			--   Near/Far   8 / 1000 (in ALLEN vier identisch)
+			--   Blick      annaehernd waagerecht (-2 bis -16 Grad)
+			--   Richtung   Kamera steht in +X vom Ziel, in allen drei Faellen
+			--   Bildbreite 23 bis 31 Einheiten - also etwa eine Kopfbreite,
+			--              unabhaengig von der Modellhoehe (110 bis 238)
+			-- Daraus: nicht die Modellgroesse bestimmt den Abstand, sondern
+			-- die Groesse des gerahmten Ausschnitts.
+			undo "Create Portrait Camera" on
+			(
+				local fovDeg = 45.0
+				local headLo = undefined
+				local headHi = undefined
+
+				if selection.count > 0 then
+				(
+					-- Auswahl = Kopf, ebenfalls in der Initial-Pose gemessen
+					at time 0
+					for o in selection do
+					(
+						try
+						(
+							local bb = nodeGetBoundingBox o (matrix3 1)
+							if headLo == undefined then ( headLo = bb[1] ; headHi = bb[2] )
+							else
+							(
+								headLo = [ amin headLo.x bb[1].x, amin headLo.y bb[1].y, amin headLo.z bb[1].z ]
+								headHi = [ amax headHi.x bb[2].x, amax headHi.y bb[2].y, amax headHi.z bb[2].z ]
+							)
+						)
+						catch()
+					)
+				)
+
+				if headLo == undefined then
+				(
+					-- Ohne Auswahl: oberste 20 % des Modells als Kopf annehmen
+					local b = getModelBounds()
+					local h = b[2].z - b[1].z
+					headLo = [b[1].x, b[1].y, b[2].z - h * 0.2]
+					headHi = [b[2].x, b[2].y, b[2].z]
+				)
+
+				local ctr = (headLo + headHi) / 2.0
+				local w = amax (headHi.x - headLo.x) (headHi.y - headLo.y)
+				local hh = headHi.z - headLo.z
+				local frame = amax w hh
+				if frame < 0.001 then frame = 10.0
+
+				-- Abstand so, dass der Ausschnitt formatfuellend ist, plus Rand
+				local dist = (frame * 0.5) / (tan (fovDeg * 0.5)) * 1.15
+
+				-- Blickrichtung: In den MDX-Portraits steht die Kamera bei +X.
+				-- Beim Export vertauscht NeoDex aber X und Y (Max X wird MDX Y),
+				-- in Max entspricht das also der Y-Achse. -Y ist die Frontalsicht
+				-- von Max, dorthin schauen Charaktere ueblicherweise.
+				local camPos = [ctr.x, ctr.y - dist, ctr.z]
+
+				local cam = TargetCamera name:(uniqueName "Portrait Camera") \
+				                         pos:camPos target:(TargetObject pos:ctr)
+				cam.fov = fovDeg
+				cam.nearclip = 8
+				cam.farclip = 1000
+				cam.target.name = cam.name + ".Target"
+
+				putInLayer #(cam, cam.target) "Cameras"
+				select cam
+				format "NeoDex: Portrait camera created - target %  distance %  fov %\n" \
+				       ctr (dist as integer) fovDeg
+				messageBox ((::L.t "anim_portrait_camera_created_msg") + "\n\n" + \
+				            (::L.t "anim_portrait_cam_distance_lbl") + " " + (dist as integer) as string + "\n" + \
+				            "FoV 45, near 8, far 1000\n\n" + \
+				            (::L.t "anim_portrait_cam_front_hint_msg")) \
+				           title:(::L.t "anim_portrait_camera_ptitle") beep:false
+			)
+		)
+
+		-- Collision Shapes. Masse aus Blizzards eigenen Modellen abgeleitet:
+		--   Footman  Sphaeren bei 61 % / 21 % der Hoehe, Radius 0,37 / 0,37 x Hoehe
+		--   Arthas   Sphaeren bei 74 % / 33 % der Hoehe, Radius 0,39 / 0,49 x Hoehe
+		--   Sanctum  eine Box, nur 17 bis 33 % der Modellmasse - sie umschliesst
+		--            den Sockel, nicht die Auskragungen
+		-- Beide ohne Parent, auf der Mittelachse.
+		fn createCollisionShapes alsBox =
+		(
+			local b = getModelBounds()
+			local lo = b[1]
+			local hi = b[2]
+			local h = hi.z - lo.z
+			if h < 0.001 then h = 100.0
+			local cx = (lo.x + hi.x) / 2.0
+			local cy = (lo.y + hi.y) / 2.0
+			local erzeugt = #()
+
+			if alsBox then
+			(
+				local bx = Wc3CollisionBox name:(uniqueName "Collision Box") \
+				                           pos:[cx, cy, lo.z + h * 0.5]
+				bx.width  = (hi.x - lo.x) * 0.5
+				bx.length = (hi.y - lo.y) * 0.5
+				bx.height = h * 0.6
+				append erzeugt bx
+			)
+			else
+			(
+				local s1 = Wc3CollisionSphere name:(uniqueName "Collision Sphere") \
+				                              pos:[cx, cy, lo.z + h * 0.65]
+				s1.radius = h * 0.38
+				local s2 = Wc3CollisionSphere name:(uniqueName "Collision Sphere") \
+				                              pos:[cx, cy, lo.z + h * 0.27]
+				s2.radius = h * 0.43
+				append erzeugt s1
+				append erzeugt s2
+			)
+			putInLayer erzeugt "Collision Objects"
+			select erzeugt
+			format "NeoDex: % collision shape(s) created, model height %\n" erzeugt.count (h as integer)
+			ok
+		)
+
+		on createCollSphereBtn pressed do
+		(
+			undo "Create Collision Spheres" on ( createCollisionShapes false )
+		)
+
+		on createCollBoxBtn pressed do
+		(
+			undo "Create Collision Box" on ( createCollisionShapes true )
+		)
+
 		on createAttachmentPointsBtn pressed do
 		(
 			undo "Create Attachment Points" on
@@ -724,7 +932,7 @@ struct AnimTools
 			
 			::AnimTools.isGeneralPoppedOut = true
 			popOutBtn.text = ::L.t "common_dock_btn"
-			createDialog generalRoll width:440 height:202 style:#(#style_titlebar, #style_sysmenu, #style_minimizebox, #style_resizing)
+			createDialog generalRoll width:440 height:254 style:#(#style_titlebar, #style_sysmenu, #style_minimizebox, #style_resizing)
 		)
 		
 		on generalRoll close do
@@ -785,6 +993,13 @@ struct AnimTools
 				fixSquadbtn.tooltip = ::L.t "anim_nonlinear_rotation_keys_may_a_tip"
 				createAttachmentPointsBtn.text = ::L.t "anim_create_attachment_points_btn"
 				createAttachmentPointsBtn.tooltip = ::L.t "anim_automatically_create_attachmen_tip"
+				boneToolsGrpB.caption = ::L.t "anim_one_click_tools_grp"
+				createPortraitCamBtn.text = ::L.t "anim_one_click_portrait_camera_btn"
+				createPortraitCamBtn.tooltip = ::L.t "anim_creates_a_portrait_camera_fram_tip"
+				createCollSphereBtn.text = ::L.t "anim_one_click_collision_spheres_btn"
+				createCollSphereBtn.tooltip = ::L.t "anim_creates_two_collision_spheres_tip"
+				createCollBoxBtn.text = ::L.t "anim_one_click_collision_box_btn"
+				createCollBoxBtn.tooltip = ::L.t "anim_creates_a_collision_box_sized_tip"
 			)
 		)
     ),

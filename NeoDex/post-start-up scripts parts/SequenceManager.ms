@@ -70,6 +70,149 @@ struct SequenceManager
         ) catch()
     ),
     
+    -- Sammelt ein Material und alle darin verschachtelten Sub-Materialien flach ein.
+    -- Noetig, weil NeoDex beim Import mehrschichtiger WC3-Materialien eine
+    -- CompositeMaterial anlegt (NeoDexSceneRebuilder.getCompoundMaterial). Deren
+    -- .alpha und .texture existieren nicht, der Zugriff lief bisher ins catch()
+    -- und die Animationen der Layer blieben unsichtbar. Deckt Composite
+    -- (baseMaterial + materialList) und Multi/Sub-Object (getNumSubMtls) ab.
+    fn collectMaterialTree mat depth acc =
+    (
+        if mat != undefined and depth <= 8 and (findItem acc mat) == 0 then
+        (
+            append acc mat
+            try
+            (
+                if (isProperty mat #baseMaterial) and mat.baseMaterial != undefined then
+                    this.collectMaterialTree mat.baseMaterial (depth + 1) acc
+            )
+            catch()
+            try
+            (
+                if isProperty mat #materialList then
+                    for i = 1 to mat.materialList.count where mat.materialList[i] != undefined do
+                        this.collectMaterialTree mat.materialList[i] (depth + 1) acc
+            )
+            catch()
+            try
+            (
+                local n = getNumSubMtls mat
+                if n != undefined and n > 0 then
+                    for i = 1 to n do
+                    (
+                        local sm = getSubMtl mat i
+                        if sm != undefined then this.collectMaterialTree sm (depth + 1) acc
+                    )
+            )
+            catch()
+        )
+        acc
+    ),
+
+	-- Kopiert die Keys EINES Controllers, sofern animiert und nicht zyklisch.
+	-- Liegt auf Struct-Ebene, weil MaxScript einer verschachtelten fn keinen
+	-- Zugriff auf lokale fns der umgebenden fn erlaubt
+	-- ("No outer local variable references permitted here").
+	fn copyControllerKeys con srcInterval offset bumpFn =
+	(
+		if con == undefined then return false
+		if con.keys == undefined or con.keys.count == 0 then return false
+
+		local isGlobal = false
+		try (isGlobal = (getAfterORT con == #cycle)) catch()
+		if isGlobal then return false
+
+		deselectKeys con
+		selectKeys con srcInterval
+		copyPasteKeys con bumpFn offset #replacekeys
+		deselectKeys con
+		true
+	),
+
+	-- Transform-Keys duplizieren.
+	-- WICHTIG: Ein PRS-Controller ist KEIN Leaf-Controller - seine Keys liegen
+	-- auf den Sub-Controllern Position / Rotation / Scale. Laut MAXScript-
+	-- Referenz liefern nicht keyframebare Controller ein LEERES KeyArray, ein
+	-- direkter Aufruf auf dem Transform-Track wuerde also an ".keys.count == 0"
+	-- abprallen und nichts kopieren.
+	-- Darum die drei Sub-Controller einzeln - das bringt zugleich den Schutz
+	-- gegen Global Sequences pro Kanal. Nur wenn keiner existiert (LookAt hat
+	-- keine Rotation, IK gar keine Sub-Controller) wird der komplette Track
+	-- kopiert, so wie es der Handler frueher immer getan hat.
+	fn copyTransformKeys obj srcInterval offset bumpFn =
+	(
+		local anySub = false
+		try (this.copyControllerKeys obj.pos.controller      srcInterval offset bumpFn ; anySub = true) catch()
+		try (this.copyControllerKeys obj.rotation.controller srcInterval offset bumpFn ; anySub = true) catch()
+		try (this.copyControllerKeys obj.scale.controller    srcInterval offset bumpFn ; anySub = true) catch()
+
+		if not anySub then
+		(
+			try
+			(
+				local tc = undefined
+				try (tc = obj.transform.controller) catch (tc = undefined)
+				if tc == undefined then try (tc = obj.controller) catch (tc = undefined)
+				if tc != undefined then
+				(
+					deselectKeys tc
+					selectKeys tc srcInterval
+					copyPasteKeys tc bumpFn offset #replacekeys
+					deselectKeys tc
+				)
+			)
+			catch()
+		)
+		ok
+	),
+
+	-- Biped-Transform-Keys duplizieren.
+	-- Der Transform-Track ist laut Referenz nicht auf allen Biped-Nodes
+	-- offengelegt, der Controller ist aber immer ueber obj.controller
+	-- erreichbar. Bip001 (COM) verteilt seine Keys auf die Sub-Controller
+	-- vertical / horizontal / turning; alle uebrigen Biped-Nodes
+	-- (BipSlave_Control) haben sie direkt auf dem Controller.
+	-- Rueckgabe: true, wenn als Biped erkannt und behandelt - dann laeuft
+	-- copyTransformKeys fuer dieses Objekt nicht mehr.
+	fn copyBipedTransformKeys obj srcInterval offset bumpFn =
+	(
+		local handled = false
+		try
+		(
+			local tc = obj.controller
+			if tc != undefined then
+			(
+				local hasSubs = false
+				try
+				(
+					hasSubs = (isProperty tc #vertical) and \
+					          (isProperty tc #horizontal) and \
+					          (isProperty tc #turning)
+				)
+				catch()
+
+				if hasSubs then
+				(
+					handled = true
+					try (this.copyControllerKeys tc.vertical.controller   srcInterval offset bumpFn) catch()
+					try (this.copyControllerKeys tc.horizontal.controller srcInterval offset bumpFn) catch()
+					try (this.copyControllerKeys tc.turning.controller    srcInterval offset bumpFn) catch()
+				)
+				else
+				(
+					local cn = (classOf tc) as string
+					if cn == "BipSlave_Control" or cn == "Footsteps" then
+					(
+						handled = true
+						this.copyControllerKeys tc srcInterval offset bumpFn
+					)
+				)
+			)
+		)
+		catch (handled = false)
+		handled
+	),
+
     public fn scanGlobalSequences =
     (
         local durations = #()
@@ -88,10 +231,15 @@ struct SequenceManager
             -- ============================================================
             -- 2) Material-Level Controller (Alpha, UV, IFL Textures)
             -- ============================================================
-            local mat = undefined
-            try (mat = obj.material) catch()
+            local objMat = undefined
+            try (objMat = obj.material) catch()
             
-            if mat != undefined and (findItem scannedMaterials mat) == 0 then
+            -- Materialbaum flach einsammeln, damit auch Layer innerhalb einer
+            -- CompositeMaterial erfasst werden. Der Block darunter ist unveraendert.
+            local matTree = #()
+            if objMat != undefined then this.collectMaterialTree objMat 0 matTree
+            
+            for mat in matTree where (findItem scannedMaterials mat) == 0 do
             (
                 append scannedMaterials mat
                 
@@ -114,6 +262,22 @@ struct SequenceManager
                 -- IFL Texture Animation (erzeugt immer eine Global Sequence)
                 try (this.checkIFLForGlobalSeq mat.texture &durations) catch()
             )
+
+            -- ============================================================
+            -- 3) Modifier-Stack: Wc3VertexMod = Geoset-Farbanimation (KGAC)
+            -- ============================================================
+            -- Sitzt weder am Node noch am Material, sondern auf einem Modifier
+            -- (siehe NeoDexSceneRebuilder.applyGeosetAnimations). Steht bewusst
+            -- ausserhalb des Material-Blocks - Modifier gibt es unabhaengig davon.
+            try
+            (
+                for md in obj.modifiers where md != undefined do
+                (
+                    if (classOf md) == Wc3VertexMod then
+                        this.checkControllerForGlobalSeq md.VertexColor.controller &durations
+                )
+            )
+            catch()
         )
         
         sort durations
@@ -1220,53 +1384,56 @@ struct SequenceManager
 					local timeOffset = newStartTime - seq.starttime
 					
 					-- Helper: copy keys of a single controller if animated and not global
-					fn copyControllerKeys con srcInterval offset bumpFn =
-					(
-						if con == undefined then return false
-						if con.keys == undefined or con.keys.count == 0 then return false
-						
-						local isGlobal = false
-						try ( isGlobal = (getAfterORT con == #cycle) ) catch()
-						if isGlobal then return false
-						
-						deselectKeys con
-						selectKeys con srcInterval
-						copyPasteKeys con bumpFn offset #replacekeys
-						deselectKeys con
-						true
-					)
+					local srcInterval = interval seq.starttime seq.endtime
 					
-					try
+					for obj in objects do
 					(
-						local srcInterval = interval seq.starttime seq.endtime
-						
-						for obj in objects do
+						-- try pro Objekt statt um die ganze Schleife: vorher hat ein
+						-- einziges werfendes Objekt den Rest der Schleife abgebrochen,
+						-- alle folgenden Objekte blieben komplett unbearbeitet.
+						try
 						(
 							-- Transform keys
-							local transCon = obj.transform.controller
-							deselectKeys transCon
-							selectKeys transCon srcInterval
-							copyPasteKeys transCon self.bumpTime timeOffset #replacekeys
-							deselectKeys transCon
+							-- Erst Biped probieren; nur wenn es keines ist, den normalen
+							-- Weg ueber copyTransformKeys gehen. Der zerlegt den Track in
+							-- pos / rotation / scale, damit der Schutz gegen Global
+							-- Sequences pro Kanal greift, und faellt bei nicht zerlegbaren
+							-- Controllern auf den kompletten Track zurueck.
+							try
+							(
+								if not (self.copyBipedTransformKeys obj srcInterval timeOffset self.bumpTime) then
+									self.copyTransformKeys obj srcInterval timeOffset self.bumpTime
+							)
+							catch()
 							
 							-- Visibility keys
 							local visCon = getVisController obj
 							if visCon != undefined then
-								copyControllerKeys visCon srcInterval timeOffset self.bumpTime
+								self.copyControllerKeys visCon srcInterval timeOffset self.bumpTime
 							
 							-- Camera FOV
 							try
 							(
 								if (superClassOf obj == camera) then
-									copyControllerKeys obj.fov.controller srcInterval timeOffset self.bumpTime
+									self.copyControllerKeys obj.fov.controller srcInterval timeOffset self.bumpTime
 							)
 							catch()
 							
 							-- Material: Alpha + Texture Animations
 							try
 							(
-								local mat = obj.material
-								if mat != undefined and (classOf mat == Warcraft3) then
+								local objMat = obj.material
+								-- Bei mehrschichtigen Modellen haengt am Objekt eine
+								-- CompositeMaterial, keine Warcraft3. Die alte Bedingung
+								-- war dann false und KEIN Material-Controller wurde
+								-- dupliziert - weder Alpha noch UV noch MatColor.
+								-- collectMaterialTree sammelt Composite- und
+								-- Multi/Sub-Object-Layer flach mit ein; der Block darunter
+								-- ist unveraendert und laeuft nur ueber mehr Materialien.
+								local matTree = #()
+								if objMat != undefined then self.collectMaterialTree objMat 0 matTree
+								
+								for mat in matTree where (classOf mat == Warcraft3) do
 								(
 									local matCons = #()
 									try ( if mat.Alpha.isAnimated then append matCons mat.Alpha.controller ) catch()
@@ -1278,7 +1445,7 @@ struct SequenceManager
 									try ( if mat.MatColor.isAnimated then append matCons mat.MatColor.controller ) catch()
 									
 									for con in matCons do
-										copyControllerKeys con srcInterval timeOffset self.bumpTime
+										self.copyControllerKeys con srcInterval timeOffset self.bumpTime
 								)
 							)
 							catch()
@@ -1303,15 +1470,28 @@ struct SequenceManager
 									(
 										local prop = getProperty bo paramName
 										if prop.isAnimated and prop.controller != undefined then
-											copyControllerKeys prop.controller srcInterval timeOffset self.bumpTime
+											self.copyControllerKeys prop.controller srcInterval timeOffset self.bumpTime
 									)
 									catch()
 								)
 							)
 							catch()
+							
+							-- Wc3VertexMod: Geoset-Farbanimation (KGAC).
+							-- Sitzt weder am Node noch am Material, sondern auf einem
+							-- Modifier - wurde deshalb bisher nicht mitdupliziert.
+							try
+							(
+								for md in obj.modifiers where md != undefined do
+								(
+									if (classOf md) == Wc3VertexMod then
+										self.copyControllerKeys md.VertexColor.controller srcInterval timeOffset self.bumpTime
+								)
+							)
+							catch()
 						)
+						catch print (getCurrentException())
 					)
-					catch print (getCurrentException())
 					
                 )
                 self.saveSequences()
@@ -1935,14 +2115,14 @@ struct SequenceManager
             
             setListItems()
             
-            callbacks.removeScripts id:#NeoDex
+            callbacks.removeScripts id:#NeoDexSeqMgr
             
-            callbacks.addScript #filePostOpen sceneChangeCallback id:#NeoDex
-            callbacks.addScript #systemPostReset sceneChangeCallback id:#NeoDex
-            callbacks.addScript #systemPostNew sceneChangeCallback id:#NeoDex
+            callbacks.addScript #filePostOpen sceneChangeCallback id:#NeoDexSeqMgr
+            callbacks.addScript #systemPostReset sceneChangeCallback id:#NeoDexSeqMgr
+            callbacks.addScript #systemPostNew sceneChangeCallback id:#NeoDexSeqMgr
 			
-			callbacks.addScript #sceneUndo listUpdateAfterUndoRedo id:#NeoDex
-			callbacks.addScript #sceneRedo listUpdateAfterUndoRedo id:#NeoDex
+			callbacks.addScript #sceneUndo listUpdateAfterUndoRedo id:#NeoDexSeqMgr
+			callbacks.addScript #sceneRedo listUpdateAfterUndoRedo id:#NeoDexSeqMgr
 
 			-- Localization
 			if ::L != undefined then
@@ -2021,7 +2201,7 @@ struct SequenceManager
 				))
 				tmr.Start()
 			)
-            callbacks.removeScripts id:#NeoDex
+            callbacks.removeScripts id:#NeoDexSeqMgr
             self.saveSequences()
 			self.saveIgnoredSequences()  -- Ignore-Liste speichern
         )

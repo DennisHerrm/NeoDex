@@ -1,0 +1,19 @@
+# Per-user settings written by NeoDex at runtime
+NeoDex_Settings.ini
+
+# Installer leftovers (Inno Setup uninstaller)
+unins*.exe
+unins*.dat
+
+# Backup copies
+*Kopie*
+* old.*
+*.bak
+*.orig
+
+# OS / editor files
+Thumbs.db
+desktop.ini
+.DS_Store
+.vs/
+.vscode/

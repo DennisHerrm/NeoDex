@@ -195,21 +195,42 @@ struct GeometryUtilitiesStruct
             local f = faces[i]
             for j = 1 to 3 do
             (
-                if vertices[tvf[j]] == undefined then
-                    vertices[tvf[j]] = f[j]
+                local tvIdx = tvf[j]
+                if vertices[tvIdx] == undefined then
+                    vertices[tvIdx] = f[j]
                 else
-                    if vertices[tvf[j]] != f[j] then
+                    if vertices[tvIdx] != f[j] then
                     (
-                        local tvIdx = tvf[j]
-                        local index = if tvIdx <= reverseIndexer.count and reverseIndexer[tvIdx] != undefined then reverseIndexer[tvIdx] else 0
-                        if index != 0 then
-                            tvf[j] = texNum + index
+                        -- Dieser Map-Vertex wird bereits von einem ANDEREN
+                        -- Geometrie-Vertex benutzt. Das MDX-Format braucht je
+                        -- Kombination (Map-Vertex, Geo-Vertex) einen eigenen
+                        -- Vertex, also wird hier einer nachgelegt.
+                        --
+                        -- Frueher stand in reverseIndexer[tvIdx] nur EIN
+                        -- Ersatzindex. Ein dritter oder vierter Geo-Vertex am
+                        -- selben Map-Vertex bekam deshalb den Index des
+                        -- zweiten: seine Position ging verloren, und die Faces
+                        -- zogen sich zu langen Zipfeln zusammen. Sichtbar war
+                        -- das am Muster "exportierte Vertices = 2 x MapVerts".
+                        -- Jetzt wird je Map-Vertex eine LISTE gefuehrt, es
+                        -- entstehen also beliebig viele Kopien.
+                        local lst = if tvIdx <= reverseIndexer.count then reverseIndexer[tvIdx] else undefined
+                        if lst == undefined then
+                        (
+                            lst = #()
+                            reverseIndexer[tvIdx] = lst
+                        )
+                        local found = 0
+                        for e in lst while found == 0 do
+                            if e[1] == f[j] then found = e[2]
+                        if found != 0 then
+                            tvf[j] = texNum + found
                         else
                         (
                             append indexer tvIdx
-                            reverseIndexer[tvIdx] = indexer.count
-                            tvf[j] = indexer.count + texNum
                             append extraVertices f[j]
+                            append lst #(f[j], indexer.count)
+                            tvf[j] = indexer.count + texNum
                         )
                     )
             )
@@ -244,7 +265,7 @@ struct GeometryUtilitiesStruct
     
     -- Full unwrap break across all supported map channels
     -- Returns: #(faces, tverticesPerChannel, vertexMapper)
-    fn breakUnwrap obj faces:undefined numVerts:undefined =
+    fn breakUnwrap obj faces:undefined numVerts:undefined channels:undefined =
     (
         fn compareMaps a b = if (a[2] < b[2]) then -1 else 1
         
@@ -258,9 +279,22 @@ struct GeometryUtilitiesStruct
         local Maps = #()
         local tmp = #()
         
-        for i = 1 to (meshop.getNumMaps obj) do
-            if (meshop.getMapSupport obj i) then
-                append tmp #(i, (meshop.getNumMapVerts obj i))
+        -- channels: optionale Liste der zu verarbeitenden Map-Kanaele.
+        -- Ohne Angabe werden wie bisher alle unterstuetzten Kanaele genommen.
+        -- Mit Angabe kann der Aufrufer unbenutzte Kanaele ueberspringen, ohne
+        -- sie am Szenenobjekt loeschen zu muessen.
+        if channels != undefined and channels.count > 0 then
+        (
+            for i in channels do
+                if i >= 1 and (meshop.getMapSupport obj i) then
+                    append tmp #(i, (meshop.getNumMapVerts obj i))
+        )
+        else
+        (
+            for i = 1 to (meshop.getNumMaps obj) do
+                if (meshop.getMapSupport obj i) then
+                    append tmp #(i, (meshop.getNumMapVerts obj i))
+        )
         
         qsort tmp compareMaps
         Maps[tmp.count] = undefined
@@ -393,4 +427,4 @@ global GeoUtils = GeometryUtilitiesStruct()
 fn getFaces m = ::GeoUtils.getFaces m
 fn gatherSmoothGroupData obj = ::GeoUtils.gatherSmoothGroupData obj
 fn breakUnwrapFast obj = ::GeoUtils.breakUnwrapFast obj
-fn breakUnwrap obj faces:undefined numVerts:undefined = ::GeoUtils.breakUnwrap obj faces:faces numVerts:numVerts
+fn breakUnwrap obj faces:undefined numVerts:undefined channels:undefined = ::GeoUtils.breakUnwrap obj faces:faces numVerts:numVerts channels:channels

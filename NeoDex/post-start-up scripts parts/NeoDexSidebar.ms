@@ -172,7 +172,7 @@ rollout NeoDexSidebarRollout "NeoDex" width:38 height:590
         try (openToolStandalone ::VisibilityKeyer ::VisibilityKeyer.mainRollout 440 242) catch()
     
     on btn_animgeneral Click do
-        try (openAnimToolRollout ::AnimTools.generalRoll #isGeneralPoppedOut #savedGeneralIndex 440 202) catch()
+        try (openAnimToolRollout ::AnimTools.generalRoll #isGeneralPoppedOut #savedGeneralIndex 440 254) catch()
     
     on btn_animctrl Click do
         try (openAnimToolRollout ::AnimTools.controllersRoll #isControllersPoppedOut #savedControllersIndex 440 177) catch()

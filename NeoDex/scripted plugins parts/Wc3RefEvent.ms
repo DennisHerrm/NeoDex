@@ -92,6 +92,18 @@ plugin simpleManipulator Wc3_Event
             localizedEntry "FTL0" "TrollLeft",localizedEntry "FTR0" "TrollRight",
             localizedEntry "FWL0" "WheelLeft0",localizedEntry "FWR0" "WheelRight0",localizedEntry "FWL1" "WheelLeft1",localizedEntry "FWR1" "WheelRight1",
             localizedEntry "FML0" "MurlocLeft",localizedEntry "FMR0" "MurlocRight",
+            -- NOTE: The four Skeleton entries below have Left/Right inverted relative
+            -- to the code letter (FSL0 -> "SkeletonRight", FSR0 -> "SkeletonLeft").
+            -- All 70 other footprint entries follow L -> Left / R -> Right, and the
+            -- Art Tools appendix confirms that mapping for every pair it lists
+            -- (FRL0/RootLeft, FTL0/TrollLeft, FWL0/WheelLeft0, FML0/MurlocLeft, ...).
+            -- This is most likely a transposition made when the list was first typed,
+            -- which then propagated into all six language tables in NeoDexLocalization.ms.
+            -- NOT corrected here: the mapping could not be confirmed against Blizzard's
+            -- own data. To settle it, check Splats\SpawnData.slk in the game MPQ/CASC
+            -- for the model path bound to FSL0. If it turns out to be the left foot,
+            -- swap the four names below AND the matching evt_FSL0/FSR0/FSL1/FSR1
+            -- entries in all six language blocks of NeoDexLocalization.ms.
             localizedEntry "FSL0" "SkeletonRight",localizedEntry "FSR0" "SkeletonLeft",localizedEntry "FSL1" "SkeletonGiantRight",localizedEntry "FSR1" "SkeletonGiantLeft",
             localizedEntry "FFL0" "FlameLeft",localizedEntry "FFR0" "FlameRight",localizedEntry "FFL1" "FlameGiantLeft",localizedEntry "FFR1" "FlameGiantRight",
             localizedEntry "FKL0" "SpikeLeft",localizedEntry "FKR0" "SpikeRight",localizedEntry "FKL1" "SpikeLargeLeft",localizedEntry "FKR1" "SpikeLargeRight",localizedEntry "FKL2" "SpikeGiantLeft",localizedEntry "FKR2" "SpikeGiantRight",

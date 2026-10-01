@@ -25,13 +25,38 @@ global neodexSkinToolsApply = 2
 -- before scripts (plugins parts load before pre-start-up scripts parts).
 -- When true, Max can open/save .blp files directly without WhiteoutTexCLI conversion.
 global NeoDexHasNativeBLP = false
+-- Merkt sich, ob die Faehigkeit bereits geklaert ist. Wurde beim Start keine
+-- blp.bmi gefunden, prueft DecodeBLPFile beim ersten echten BLP nach, ob Max
+-- die Datei trotzdem oeffnen kann - etwa weil ein anderes Produkt den
+-- Bitmap-I/O-Handler mitbringt.
+global NeoDexNativeBLPTested = false
+global NeoDexNativeBLPSource = ""
 (
-    local bundleRoot = (systemTools.getEnvVariable "APPDATA") + "\\Autodesk\\ApplicationPlugins\\NeoDex"
     local maxYear = (maxVersion())[8]
-    local bmiPath = bundleRoot + "\\native plugins\\Max" + (maxYear as string) + "\\blp.bmi"
-    local bmiPath2 = (systemTools.getEnvVariable "ALLUSERSPROFILE") + "\\Autodesk\\ApplicationPlugins\\NeoDex\\native plugins\\Max" + (maxYear as string) + "\\blp.bmi"
-    NeoDexHasNativeBLP = (doesFileExist bmiPath) or (doesFileExist bmiPath2)
-    if NeoDexHasNativeBLP then format "NeoDex: Native BLP support detected (blp.bmi)\n"
+    -- Reihenfolge = Bevorzugung. Max entscheidet zwar selbst, welcher Handler
+    -- fuer .blp aktiv ist - es kann immer nur einer sein -, aber fuer die
+    -- Erkennung und die Meldung im Listener schauen wir zuerst bei uns.
+    local roots = #(
+        (systemTools.getEnvVariable "APPDATA")         + "\\Autodesk\\ApplicationPlugins\\NeoDex",
+        (systemTools.getEnvVariable "ALLUSERSPROFILE") + "\\Autodesk\\ApplicationPlugins\\NeoDex",
+        (systemTools.getEnvVariable "APPDATA")         + "\\Autodesk\\ApplicationPlugins\\WhiteoutDex",
+        (systemTools.getEnvVariable "ALLUSERSPROFILE") + "\\Autodesk\\ApplicationPlugins\\WhiteoutDex"
+    )
+    local found = undefined
+    for r in roots while found == undefined do
+    (
+        local p = r + "\\native plugins\\Max" + (maxYear as string) + "\\blp.bmi"
+        if doesFileExist p then found = p
+    )
+    if found != undefined then
+    (
+        NeoDexHasNativeBLP = true
+        NeoDexNativeBLPTested = true
+        NeoDexNativeBLPSource = found
+        format "NeoDex: Native BLP support detected (%)\n" found
+    )
+    else
+        format "NeoDex: No blp.bmi found - checking on first BLP whether Max can open it anyway\n"
 )
 
 
@@ -855,3 +880,15 @@ struct NeoDexSequenceStorageStruct
 )
 
 global SequenceStorage = NeoDexSequenceStorageStruct()
+
+-- Cache fuer den Export: haelt je Objektname die Sequenz-Indizes, deren
+-- Hermite-Tangenten in Wc3Animation.RotationKeys bereits bearbeitet wurden.
+-- Wird dort bei Bedarf angelegt (Zeile ~1546) und in
+-- NeoDexOptimize.optimizeObjectAnimations (Zeile ~272) gelesen, um eine
+-- doppelte Rotationsoptimierung zu vermeiden.
+-- Bleibt bewusst undefined - die Schreibstelle legt das Dictionary selbst an.
+-- WICHTIG: Der Schluessel ist der Objektname. Da Bone-Namen wie "Bip001" oder
+-- "Bone01" in WC3-Modellen haeufig wiederkehren, wuerde ein Eintrag aus einem
+-- frueheren Export auf ein spaeteres Modell durchschlagen. Deshalb setzt
+-- NeoDexExportFunctions.exportScene den Cache zu Beginn jedes Exports zurueck.
+global HermiteEditedSequences
